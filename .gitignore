@@ -1,0 +1,24 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and sensitive keys
+.env
+.env.local
+
+# Database local files & backups (don't commit customer financial data to public repos)
+# data/ramkumar_bhandar.json
+data/backups/
+tests/test_*.json
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Android build outputs
+android/.gradle/
+android/app/build/
+android/build/
+

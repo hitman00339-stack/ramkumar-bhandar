@@ -1,0 +1,28 @@
+{
+  "name": "ramkumar-bhandar",
+  "version": "1.0.0",
+  "description": "रामकुमार भंडार - कृषि एवं किराना दोहरी दुकान प्रबंधन और एआई टेलीफोनी प्रणाली",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "khatabook",
+    "hindi-accounting",
+    "shop-management",
+    "ai-phone-agent",
+    "krishi-kirana"
+  ],
+  "author": "Ramkumar Bhandar",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}

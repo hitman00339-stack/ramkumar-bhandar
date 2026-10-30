@@ -1,0 +1,68 @@
+{
+  "version": "1.0.0",
+  "lastBackupTime": "2026-10-29T16:04:30.839Z",
+  "shops": {
+    "krishi": {
+      "id": "krishi",
+      "name": "बीज, खाद एवं दवाइयाँ",
+      "shortName": "कृषि शाखा",
+      "tagline": "खेती का सामान और किसानों का हिसाब",
+      "isOpen": true,
+      "lastUpdated": "2026-10-29T16:27:14.713Z",
+      "phoneServiceEnabled": true,
+      "aiPhoneSyncStatus": "synced",
+      "syncError": null
+    },
+    "kirana": {
+      "id": "kirana",
+      "name": "किराना एवं जनरल स्टोर",
+      "shortName": "किराना विंग",
+      "tagline": "घर के सामान और ग्राहकों का हिसाब",
+      "isOpen": true,
+      "lastUpdated": "2026-10-29T16:04:30.839Z",
+      "phoneServiceEnabled": true,
+      "aiPhoneSyncStatus": "synced",
+      "syncError": null
+    }
+  },
+  "customers": [],
+  "suppliers": [],
+  "products": [],
+  "transactions": [],
+  "callLogs": [],
+  "sprayerMachines": [
+    {
+      "id": "SP-01",
+      "qrCode": "SP-01",
+      "name": "बैटरी स्प्रेयर मशीन #1 (16L डबल मोटर)",
+      "batteryLevel": 100,
+      "status": "AVAILABLE",
+      "currentRental": null
+    },
+    {
+      "id": "SP-02",
+      "qrCode": "SP-02",
+      "name": "बैटरी स्प्रेयर मशीन #2 (16L हैवी ड्यूटी)",
+      "batteryLevel": 100,
+      "status": "AVAILABLE",
+      "currentRental": null
+    },
+    {
+      "id": "SP-03",
+      "qrCode": "SP-03",
+      "name": "बैटरी स्प्रेयर मशीन #3 (12L लाइटवेट)",
+      "batteryLevel": 95,
+      "status": "AVAILABLE",
+      "currentRental": null
+    },
+    {
+      "id": "SP-04",
+      "qrCode": "SP-04",
+      "name": "हाथ वाला नेपसैक स्प्रेयर #4",
+      "batteryLevel": 100,
+      "status": "AVAILABLE",
+      "currentRental": null
+    }
+  ],
+  "sprayerHistory": []
+}

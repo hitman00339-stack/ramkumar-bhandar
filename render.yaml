@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ramkumar-bhandar
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: OMNIDIM_API_KEY
+        value: DBLJu9zg5E2Mahmpp7-vrjrIX8xTAvLeBlIjKDpMMtI
+

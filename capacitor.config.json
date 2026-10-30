@@ -1,0 +1,14 @@
+{
+  "appId": "com.ramkumarbhandar.app",
+  "appName": "रामकुमार भंडार",
+  "webDir": "public",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "backgroundColor": "#003629",
+    "allowMixedContent": true
+  }
+}
