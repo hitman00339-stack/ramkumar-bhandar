@@ -12,7 +12,7 @@ const db = new Database();
 // AUTOMATED ZERO-DATA-LOSS CLOUD BACKUP SYNC
 // Mirrors all database mutations to private GitHub Gist
 // ----------------------------------------------------
-const GITHUB_BACKUP_TOKEN = process.env.GITHUB_BACKUP_TOKEN || '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';
+const GITHUB_BACKUP_TOKEN = process.env.GITHUB_BACKUP_TOKEN;
 const GITHUB_BACKUP_GIST_ID = process.env.GITHUB_BACKUP_GIST_ID || '64b6b2477878163b5262389ee9fd8429';
 
 let cloudSyncTimeout = null;
@@ -849,6 +849,18 @@ app.post('/api/sync', (req, res) => {
         } else if (item.action === 'SET_SHOP_STATUS') {
           db.setShopStatus(item.payload.shopId, item.payload.isOpen, item.payload.clientTimestamp);
           results.push({ id: item.id, status: 'success' });
+        } else if (item.action === 'CREATE_CUSTOMER') {
+          const res = db.createCustomer(item.payload);
+          results.push({ id: item.id, status: 'success', customer: res });
+        } else if (item.action === 'ISSUE_SPRAYER') {
+          const res = db.issueSprayerMachine(item.payload.machineId, item.payload);
+          results.push({ id: item.id, status: 'success', machine: res });
+        } else if (item.action === 'RETURN_SPRAYER') {
+          const res = db.returnSprayerMachine(item.payload.machineId, item.payload.returnBatteryLevel, item.payload.notes);
+          results.push({ id: item.id, status: 'success', machine: res });
+        } else if (item.action === 'CREATE_PRODUCT') {
+          const res = db.createProduct(item.payload);
+          results.push({ id: item.id, status: 'success', product: res });
         }
       } catch (err) {
         results.push({ id: item.id, status: 'error', error: err.message });

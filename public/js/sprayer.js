@@ -295,6 +295,34 @@ const SprayerUI = {
       this.closeIssueModal();
       await this.fetchData();
     } catch (err) {
+      // Offline fallback: Update local machine state immediately and queue sync!
+      const targetM = this.machines.find(m => m.id === machineId);
+      if (targetM) {
+        const expectedReturnTime = new Date(Date.now() + dueHours * 3600000).toISOString();
+        targetM.status = 'RENTED';
+        targetM.batteryLevel = batteryLevel;
+        targetM.currentRental = {
+          rentalId: 'rent_' + Date.now(),
+          customerPhone: cleanPhone,
+          customerName: customerName || 'किसान भाई',
+          issuedAt: new Date().toISOString(),
+          dueHours,
+          expectedReturnTime,
+          issueBatteryLevel: batteryLevel,
+          notes
+        };
+        AppState.syncQueue.push({
+          id: 'sync_' + Date.now(),
+          action: 'ISSUE_SPRAYER',
+          payload: { machineId, customerPhone: cleanPhone, customerName, dueHours, batteryLevel, notes }
+        });
+        AppState.saveToStorage();
+        this.render();
+        this.closeIssueModal();
+        AppState.showToast('⚠️ ऑफ़लाइन: स्प्रे मशीन किराए पर दर्ज हुई (फोन में सुरक्षित)');
+        AppState.updateNetworkBadge();
+        return;
+      }
       alert('त्रुटि: ' + err.message);
     }
   },
@@ -357,6 +385,24 @@ const SprayerUI = {
       this.closeReturnModal();
       await this.fetchData();
     } catch (err) {
+      // Offline fallback
+      const targetM = this.machines.find(m => m.id === this.selectedMachineId);
+      if (targetM) {
+        targetM.status = 'AVAILABLE';
+        targetM.batteryLevel = isNaN(returnBatteryLevel) ? targetM.batteryLevel : returnBatteryLevel;
+        targetM.currentRental = null;
+        AppState.syncQueue.push({
+          id: 'sync_' + Date.now(),
+          action: 'RETURN_SPRAYER',
+          payload: { machineId: this.selectedMachineId, returnBatteryLevel, notes }
+        });
+        AppState.saveToStorage();
+        this.render();
+        this.closeReturnModal();
+        AppState.showToast('⚠️ ऑफ़लाइन: मशीन वापसी फोन में सुरक्षित दर्ज हुई');
+        AppState.updateNetworkBadge();
+        return;
+      }
       alert('त्रुटि: ' + err.message);
     }
   },
