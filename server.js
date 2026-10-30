@@ -413,7 +413,7 @@ app.post('/api/customers/:id/reminder', (req, res) => {
 });
 
 // AI AGENT REMINDER CALL TO UDHAR CUSTOMER
-app.post('/api/ai-phone/call-customer', (req, res) => {
+app.post('/api/ai-phone/call-customer', async (req, res) => {
   try {
     const { customerId, customerName, phone, amount, shopId } = req.body;
     if (!phone) {
@@ -422,18 +422,47 @@ app.post('/api/ai-phone/call-customer', (req, res) => {
 
     const shop = db.getShop(shopId || 'krishi');
     const shopName = shop ? shop.name : 'रामकुमार भंडार';
+    const cleanNumber = phone.replace(/\D/g, '');
+    const formattedNumber = cleanNumber.startsWith('91') ? `+${cleanNumber}` : `+91${cleanNumber}`;
+    const promptText = `नमस्ते ${customerName || 'किसान'} जी, रामकुमार भंडार (${shopName}) से सूचना कॉल है। आपके खाते में ₹${amount || 0} का बकाया हिसाब है। कृपया समय पर भुगतान करने की कृपा करें। धन्यवाद!`;
+
+    let omniDispatched = false;
+    let omniCallId = null;
+    try {
+      const omniRes = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          agent_id: 276578,
+          to: formattedNumber,
+          user_name: customerName || 'ग्राहक',
+          prompt: promptText
+        })
+      });
+      if (omniRes.ok) {
+        const omniData = await omniRes.json();
+        omniDispatched = true;
+        omniCallId = omniData.call_id || omniData.id;
+      }
+    } catch (e) {
+      // Graceful local logging fallback
+    }
 
     const callRecord = {
       id: 'call_out_' + Date.now(),
+      omniCallId,
       direction: 'outbound',
-      callerNumber: phone,
+      callerNumber: formattedNumber,
       customerName: customerName || 'ग्राहक',
       shopTarget: shopId || 'krishi',
       timestamp: new Date().toISOString(),
       queryText: `उधार तकादा कॉल: ₹${amount || 0} बकाया राशि`,
-      responseText: `नमस्ते ${customerName || ''} जी, रामकुमार भंडार (${shopName}) से कॉल है। आपका कुल ₹${amount || 0} का बकाया हिसाब है। कृपया इसे जल्द से जल्द चुकता करने की कृपा करें।`,
+      responseText: promptText,
       needsFollowUp: false,
-      status: 'initiated'
+      status: omniDispatched ? 'dispatched' : 'initiated'
     };
 
     if (!db.data.callLogs) db.data.callLogs = [];
@@ -442,7 +471,7 @@ app.post('/api/ai-phone/call-customer', (req, res) => {
 
     res.json({
       success: true,
-      message: `AI एजेंट द्वारा ${customerName} (+91 ${phone}) को तकादा कॉल का निर्देश दे दिया गया है`,
+      message: `AI एजेंट द्वारा ${customerName} (${formattedNumber}) को तकादा कॉल का निर्देश दे दिया गया है`,
       callRecord
     });
   } catch (err) {
@@ -827,6 +856,26 @@ app.get('/api/export/csv', (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.send('\uFEFF' + csv); // Include BOM for proper Excel UTF-8 Hindi rendering
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Lightweight multi-device synchronization version check
+app.get('/api/sync/version', (req, res) => {
+  try {
+    const data = db.data || {};
+    res.json({
+      success: true,
+      lastMutationTime: data.lastMutationTime || data.lastBackupTime || new Date().toISOString(),
+      counts: {
+        customers: (data.customers || []).length,
+        transactions: (data.transactions || []).length,
+        products: (data.products || []).length,
+        sprayers: (data.sprayerMachines || []).length,
+        callLogs: ((data.callLogs || []).length) + ((data.aiPhone?.callLogs || []).length)
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

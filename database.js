@@ -621,6 +621,9 @@ class Database {
   }
 
   save() {
+    if (this.data) {
+      this.data.lastMutationTime = new Date().toISOString();
+    }
     const content = JSON.stringify(this.data, null, 2);
     try {
       const tempPath = this.filePath + '.tmp';

@@ -43,6 +43,7 @@ const AppState = {
   suppliers: [],
   callLogs: [],
   activeAiInstruction: '',
+  lastMutationTime: null,
   
   // Offline sync queue
   syncQueue: [],
@@ -51,6 +52,7 @@ const AppState = {
   init() {
     this.loadFromStorage();
     this.setupNetworkListeners();
+    this.startAutoSyncPoller();
     this.fetchInitialData();
   },
 
@@ -135,6 +137,39 @@ const AppState = {
       }
       this.updateNetworkBadge();
     }, 15000);
+  },
+
+  startAutoSyncPoller() {
+    const checkSync = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const res = await this.fetchWithTimeout('/api/sync/version', {}, 3500);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.lastMutationTime) {
+            if (this.lastMutationTime && this.lastMutationTime !== data.lastMutationTime) {
+              console.log('[Multi-Device Sync] Data mutation detected on remote phone/server. Synchronizing...');
+              await this.fetchInitialData();
+              this.showToast('🔄 अन्य डिवाइस से नया डेटा स्वतः सिंक हुआ!');
+            }
+            this.lastMutationTime = data.lastMutationTime;
+          }
+        }
+      } catch (e) {
+        // Silent fail on weak connectivity
+      }
+    };
+
+    // Auto check every 6 seconds for multi-device synchronization
+    setInterval(checkSync, 6000);
+
+    // Sync instantly when user focuses or returns to tab/app
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        checkSync();
+      }
+    });
+    window.addEventListener('focus', checkSync);
   },
 
   updateNetworkBadge() {

@@ -182,6 +182,33 @@
     </div>
   </header>
 
+  <!-- FLOATING PERSISTENT AI CALLING QUEUE BANNER -->
+  <div id="active-calling-banner" class="hidden fixed top-16 left-0 right-0 z-40 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-4 py-3 shadow-2xl border-b-2 border-indigo-500 backdrop-blur-md items-center justify-between gap-3">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="relative flex items-center justify-center">
+        <span class="w-3.5 h-3.5 rounded-full bg-emerald-400 animate-ping"></span>
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 absolute"></span>
+      </div>
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-xs md:text-sm text-emerald-300" id="calling-banner-progress">📞 AI ऑटो-कॉलिंग जारी है: (1/5)</span>
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-900 text-indigo-200 border border-indigo-700" id="calling-banner-status">कॉल लगाई जा रही है</span>
+        </div>
+        <div class="text-[11px] md:text-xs text-slate-300 truncate mt-0.5" id="calling-banner-current-target">
+          वर्तमान: रामलाल (+91 98260...) • ₹2,400 बाकी
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-1.5 shrink-0">
+      <button onclick="TelephonyUI.pauseOrResumeAutoDial()" id="calling-banner-pause-btn" class="h-8 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold border border-slate-600 active:scale-95 transition-all">
+        ⏸️ रोकें
+      </button>
+      <button onclick="TelephonyUI.stopAutoDial()" class="h-8 px-2.5 rounded-lg bg-rose-900/90 hover:bg-rose-800 text-rose-200 text-xs font-bold border border-rose-700 active:scale-95 transition-all">
+        ⏹️ बंद करें
+      </button>
+    </div>
+  </div>
+
   <!-- MAIN SCROLLABLE CONTENT CONTAINER -->
   <main class="flex flex-col relative w-full pt-16 pb-28 bg-surface min-h-screen">
     
@@ -684,17 +711,65 @@
 
       </div>
 
-      <!-- LIVE OMNIDIMENSION CALL HISTORY & RECORDINGS -->
-      <div class="flex flex-col gap-3 mt-2">
-        <div class="flex items-center justify-between">
+      <!-- 4 SEGMENTED COLUMNS / TABS FOR CALL LOGS & AI CALLING -->
+      <div class="flex flex-col gap-3 mt-3">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
           <div>
-            <h3 class="font-bold text-base text-slate-900">लाइव कॉल रिकॉर्ड्स एवं ट्रांसक्रिप्ट</h3>
-            <p class="text-xs text-slate-500">Omnidimension AI सर्वर से प्राप्त वास्तविक कॉल इतिहास</p>
+            <h3 class="font-bold text-lg text-slate-900">कॉल रिकॉर्ड्स एवं तकादा केंद्र</h3>
+            <p class="text-xs text-slate-500">बातचीत सारांश, रिकॉर्डिंग्स, अनुत्तरित कॉल्स व शेष ग्राहक</p>
           </div>
-          <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">● लाइव कनेक्टेड</span>
+          <!-- Shop Filter for calls -->
+          <div class="inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700">
+            <button onclick="TelephonyUI.switchCallWingFilter('all')" id="btn-call-wing-all" class="px-3 py-1.5 rounded-lg bg-white shadow-xs text-slate-900 cursor-pointer">दोनों दुकानें</button>
+            <button onclick="TelephonyUI.switchCallWingFilter('krishi')" id="btn-call-wing-krishi" class="px-3 py-1.5 rounded-lg text-slate-600 cursor-pointer">🌾 कृषि</button>
+            <button onclick="TelephonyUI.switchCallWingFilter('kirana')" id="btn-call-wing-kirana" class="px-3 py-1.5 rounded-lg text-slate-600 cursor-pointer">🏪 किराना</button>
+          </div>
         </div>
-        
-        <div id="omnidim-call-logs-container" class="flex flex-col gap-3">
+
+        <!-- The 4 Segmented Tabs -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 p-1.5 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold">
+          <!-- TAB 1: ALL CALLS -->
+          <button onclick="TelephonyUI.switchCallTab('all')" id="tab-btn-all" class="h-11 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px]">call_log</span>
+            <span>📋 सभी कॉल</span>
+            <span id="badge-count-all" class="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px]">0</span>
+          </button>
+          <!-- TAB 2: CONNECTED / ANSWERED -->
+          <button onclick="TelephonyUI.switchCallTab('connected')" id="tab-btn-connected" class="h-11 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px] text-emerald-600">check_circle</span>
+            <span>✅ बात हुई</span>
+            <span id="badge-count-connected" class="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px]">0</span>
+          </button>
+          <!-- TAB 3: FAILED / UNANSWERED / NOT CONNECTED -->
+          <button onclick="TelephonyUI.switchCallTab('failed')" id="tab-btn-failed" class="h-11 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px] text-rose-600">phone_missed</span>
+            <span>❌ कनेक्ट नहीं हुआ</span>
+            <span id="badge-count-failed" class="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px]">0</span>
+          </button>
+          <!-- TAB 4: PENDING / NOT CALLED YET -->
+          <button onclick="TelephonyUI.switchCallTab('pending')" id="tab-btn-pending" class="h-11 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px] text-amber-600">schedule</span>
+            <span>⏳ कॉल बाकी (उधार)</span>
+            <span id="badge-count-pending" class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px]">0</span>
+          </button>
+        </div>
+
+        <!-- Bulk Action Toolbar (For Pending Tab & Failed Tab) -->
+        <div id="call-tab-toolbar" class="hidden items-center justify-between p-3 rounded-2xl bg-amber-50 border border-amber-200">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="call-tab-select-all" onchange="TelephonyUI.toggleSelectAllInTab(this.checked)" class="w-5 h-5 rounded accent-emerald-700 cursor-pointer"/>
+            <label for="call-tab-select-all" class="text-xs md:text-sm font-bold text-slate-800 cursor-pointer">
+              सबको चुनें (<span id="call-tab-selected-count">0</span> चुने गए)
+            </label>
+          </div>
+          <button onclick="TelephonyUI.startBatchDialFromTab()" id="btn-tab-batch-dial" class="h-10 px-4 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px]">phone_forwarded</span>
+            <span>🚀 सबको AI कॉल लगाएं</span>
+          </button>
+        </div>
+
+        <!-- Active Tab Container (Omnidim + Local logs) -->
+        <div id="omnidim-call-logs-container" class="flex flex-col gap-3 min-h-[160px]">
           <!-- Rendered by telephony.js -->
         </div>
       </div>

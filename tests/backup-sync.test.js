@@ -130,6 +130,20 @@ test('Backup, Synchronization & Data Reliability Tests', async (t) => {
     assert.strictEqual(restoredDue, initialDue);
   });
 
+  await t.test('Multi-Device Sync: Every mutation updates lastMutationTime', () => {
+    const t0 = db.data.lastMutationTime;
+    db.createTransaction({
+      shopId: 'kirana',
+      type: 'CASH_SALE',
+      amount: 150,
+      customerName: 'नकद ग्राहक',
+      description: 'बिस्कुट व चायपत्ती'
+    });
+    const t1 = db.data.lastMutationTime;
+    assert(t1, 'lastMutationTime must be populated');
+    assert(new Date(t1).getTime() >= new Date(t0 || 0).getTime(), 'lastMutationTime must be updated');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

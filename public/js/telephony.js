@@ -1,10 +1,23 @@
-// AI Telephony UI and Remote Synchronization Engine
+// AI Telephony UI, Background Auto-Dialer & Multi-Status Call Center Engine
 const TelephonyUI = {
   currentFilter: 'all',
   selectedWing: 'krishi', // 'krishi' | 'kirana'
+  currentCallTab: 'all',  // 'all' | 'connected' | 'failed' | 'pending'
+  currentWingFilter: 'all', // 'all' | 'krishi' | 'kirana'
+  cachedOmniLogs: [],
+  selectedInTab: new Set(),
+
+  // Background Auto-Dialer State
+  isAutoDialing: false,
+  isAutoDialPaused: false,
+  autoDialQueue: [],
+  autoDialCurrentIndex: 0,
+  autoDialTimer: null,
 
   init() {
     this.setupListeners();
+    // Pre-fetch live Omnidimension logs
+    this.fetchLiveOmnidimLogs();
   },
 
   setupListeners() {
@@ -14,6 +27,7 @@ const TelephonyUI = {
       refreshBtn.addEventListener('click', () => {
         AppState.retryShopSync(this.selectedWing);
         AppState.fetchCallLogs(this.selectedWing);
+        this.fetchLiveOmnidimLogs();
       });
     }
 
@@ -76,7 +90,7 @@ const TelephonyUI = {
     this.renderMasterCard();
     this.renderSyncBanner();
     this.renderInquiryTopics();
-    this.renderCallLogs();
+    this.renderCurrentTab();
   },
 
   renderMasterCard() {
@@ -151,7 +165,7 @@ const TelephonyUI = {
           <span class="font-body-sm text-body-sm text-on-surface-variant truncate">${syncText}</span>
         </div>
       </div>
-      <button onclick="AppState.retryShopSync('${this.selectedWing}')" class="px-space-sm py-1 rounded bg-surface-container-high text-primary font-label-sm text-label-sm flex-shrink-0 active:scale-95 transition-transform">
+      <button onclick="AppState.retryShopSync('${this.selectedWing}')" class="px-space-sm py-1 rounded bg-surface-container-high text-primary font-label-sm text-label-sm flex-shrink-0 active:scale-95 transition-transform cursor-pointer">
         ताज़ा करें
       </button>
     `;
@@ -174,107 +188,606 @@ const TelephonyUI = {
     `).join('');
   },
 
-  renderCallLogs() {
-    const container = document.getElementById('call-logs-container');
+  // ----------------------------------------------------
+  // 4 SEGMENTED CALL TABS & FILTERS
+  // ----------------------------------------------------
+  switchCallTab(tab) {
+    this.currentCallTab = tab;
+    this.selectedInTab.clear();
+
+    const tabs = ['all', 'connected', 'failed', 'pending'];
+    tabs.forEach(t => {
+      const btn = document.getElementById(`tab-btn-${t}`);
+      if (btn) {
+        if (t === tab) {
+          btn.className = "h-11 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all font-bold cursor-pointer";
+        } else {
+          btn.className = "h-11 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all font-semibold cursor-pointer";
+        }
+      }
+    });
+
+    const toolbar = document.getElementById('call-tab-toolbar');
+    if (toolbar) {
+      if (tab === 'pending') {
+        toolbar.classList.remove('hidden');
+        toolbar.classList.add('flex');
+      } else {
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+      }
+    }
+
+    this.renderCurrentTab();
+  },
+
+  switchCallWingFilter(wing) {
+    this.currentWingFilter = wing;
+    const wings = ['all', 'krishi', 'kirana'];
+    wings.forEach(w => {
+      const btn = document.getElementById(`btn-call-wing-${w}`);
+      if (btn) {
+        if (w === wing) {
+          btn.className = "px-3 py-1.5 rounded-lg bg-white shadow-xs text-slate-900 font-bold cursor-pointer";
+        } else {
+          btn.className = "px-3 py-1.5 rounded-lg text-slate-600 font-medium hover:text-slate-900 cursor-pointer";
+        }
+      }
+    });
+    this.renderCurrentTab();
+  },
+
+  async fetchLiveOmnidimLogs() {
+    const container = document.getElementById('omnidim-call-logs-container');
+    if (container && this.cachedOmniLogs.length === 0) {
+      container.innerHTML = `
+        <div class="p-4 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex items-center justify-center gap-2 border border-slate-200">
+          <span class="material-symbols-outlined text-[18px] animate-spin">sync</span>
+          <span>Omnidimension AI सर्वर से लाइव कॉल लोड हो रही हैं...</span>
+        </div>
+      `;
+    }
+
+    try {
+      const res = await fetch('/api/omnidim/call-logs');
+      if (res.ok) {
+        const data = await res.json();
+        this.cachedOmniLogs = data.logs || [];
+      }
+    } catch (err) {
+      console.warn('Omnidim live logs fetch skipped:', err.message);
+    }
+    this.renderCurrentTab();
+  },
+
+  renderCurrentTab() {
+    const container = document.getElementById('omnidim-call-logs-container');
     if (!container) return;
 
-    let logs = AppState.callLogs.filter(c => !this.selectedWing || c.shopId === this.selectedWing);
+    // Combine local call logs and live Omnidim logs
+    const omniCalls = this.cachedOmniLogs.map(c => {
+      const durationSec = c.call_duration_in_seconds || 0;
+      const durationMin = c.call_duration_in_minutes || 0;
+      const isConnected = durationSec > 0 || durationMin > 0;
+      const isOutbound = c.call_direction === 'outbound';
+      const phone = c.to_number || c.from_number || 'नंबर उपलब्ध नहीं';
 
-    if (logs.length === 0) {
+      return {
+        id: c.call_id || ('omni_' + Math.random()),
+        phone,
+        customerName: c.customer_name || 'ग्राहक',
+        shopId: 'krishi',
+        direction: isOutbound ? 'outbound' : 'incoming',
+        durationSec,
+        durationMin,
+        isConnected,
+        isFailed: !isConnected,
+        time: c.time_of_call || 'आज',
+        summary: c.sentiment_analysis_details || c.call_summary || (isConnected ? 'कॉल सफलतापूर्वक पूरी हुई' : 'कॉल कनेक्ट नहीं हो पाई'),
+        transcript: c.call_conversation || '',
+        audioUrl: c.internal_recording_url || c.recording_url || null
+      };
+    });
+
+    const localCalls = (AppState.callLogs || []).map(c => {
+      const durationSec = c.durationSec || 0;
+      const isConnected = durationSec > 0 || c.status === 'completed' || c.statusLabel === 'सफल बात';
+      return {
+        id: c.id,
+        phone: c.callerNumber || c.phone || 'नंबर नहीं',
+        customerName: c.customerName || 'ग्राहक',
+        shopId: c.shopTarget || c.shopId || 'krishi',
+        direction: c.direction || 'outbound',
+        durationSec,
+        durationMin: 0,
+        isConnected,
+        isFailed: !isConnected,
+        time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : 'आज',
+        summary: c.responseText || 'तकादा संदेश भेजा गया',
+        transcript: c.transcriptUser || c.queryText || '',
+        audioUrl: null
+      };
+    });
+
+    // Merged distinct list
+    let allCalls = [...omniCalls, ...localCalls];
+
+    // Filter by Shop Wing
+    if (this.currentWingFilter !== 'all') {
+      allCalls = allCalls.filter(c => c.shopId === this.currentWingFilter);
+    }
+
+    // Pending Customers (Have positive balance in selected shop/all and no call made today)
+    const calledNumbersSet = new Set(allCalls.map(c => (c.phone || '').replace(/\D/g, '')));
+    const pendingCustomers = AppState.customers.filter(c => {
+      const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      const cleanPhone = (c.phone || '').replace(/\D/g, '');
+      return due > 0 && !calledNumbersSet.has(cleanPhone);
+    });
+
+    const connectedCalls = allCalls.filter(c => c.isConnected);
+    const failedCalls = allCalls.filter(c => c.isFailed);
+
+    // Update Badges Count
+    const bAll = document.getElementById('badge-count-all');
+    const bConn = document.getElementById('badge-count-connected');
+    const bFail = document.getElementById('badge-count-failed');
+    const bPend = document.getElementById('badge-count-pending');
+    if (bAll) bAll.innerText = allCalls.length;
+    if (bConn) bConn.innerText = connectedCalls.length;
+    if (bFail) bFail.innerText = failedCalls.length;
+    if (bPend) bPend.innerText = pendingCustomers.length;
+
+    // Render depending on active tab
+    if (this.currentCallTab === 'pending') {
+      this.renderPendingTab(pendingCustomers, container);
+    } else if (this.currentCallTab === 'connected') {
+      this.renderConnectedTab(connectedCalls, container);
+    } else if (this.currentCallTab === 'failed') {
+      this.renderFailedTab(failedCalls, container);
+    } else {
+      this.renderAllCallsTab(allCalls, container);
+    }
+  },
+
+  // 1. ALL CALLS TAB
+  renderAllCallsTab(calls, container) {
+    if (calls.length === 0) {
       container.innerHTML = `
-        <div class="p-space-lg bg-surface-container-lowest rounded-xl text-center flex flex-col items-center justify-center gap-2 shadow-sm">
-          <span class="material-symbols-outlined text-[36px] text-outline-variant">phone_missed</span>
-          <p class="font-headline-sm text-on-surface">कोई कॉल लॉग नहीं है</p>
-          <p class="font-body-sm text-on-surface-variant">कॉल आते ही सारांश और ऑडियो यहाँ दिखेगा</p>
+        <div class="p-8 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200">
+          <span class="material-symbols-outlined text-[40px] text-slate-400">call_log</span>
+          <p class="font-bold text-slate-800 text-sm">अभी कोई कॉल रिकॉर्ड नहीं है</p>
+          <p class="text-xs text-slate-500">कॉल आते ही या तकादा लगाते ही लाइव विवरण यहाँ दर्ज होगा</p>
+        </div>
+      `;
+      return;
+    }
+    container.innerHTML = calls.map(c => this.renderCallCard(c)).join('');
+  },
+
+  // 2. CONNECTED CALLS TAB (बात हुई)
+  renderConnectedTab(calls, container) {
+    if (calls.length === 0) {
+      container.innerHTML = `
+        <div class="p-8 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-emerald-200">
+          <span class="material-symbols-outlined text-[40px] text-emerald-600">check_circle</span>
+          <p class="font-bold text-slate-800 text-sm">अभी कोई कनेक्टेड कॉल नहीं है</p>
+          <p class="text-xs text-slate-500">जब ग्राहक फोन उठाकर बात करेगा तो रिकॉर्डिंग और सारांश यहाँ दिखेगा</p>
+        </div>
+      `;
+      return;
+    }
+    container.innerHTML = calls.map(c => this.renderCallCard(c)).join('');
+  },
+
+  // 3. FAILED / NOT CONNECTED TAB (अनुत्तरित / व्यस्त / कॉल नहीं लगी)
+  renderFailedTab(calls, container) {
+    if (calls.length === 0) {
+      container.innerHTML = `
+        <div class="p-8 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200">
+          <span class="material-symbols-outlined text-[40px] text-emerald-600">verified</span>
+          <p class="font-bold text-slate-800 text-sm">कोई अनुत्तरित या असफल कॉल नहीं है!</p>
+          <p class="text-xs text-slate-500">सभी लगाई गई कॉल्स पर ग्राहकों से बातचीत हो चुकी है</p>
         </div>
       `;
       return;
     }
 
-    container.innerHTML = logs.map(c => this.renderCallCard(c)).join('');
+    container.innerHTML = `
+      <div class="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-900 mb-1">
+        <div class="flex items-center gap-2 font-bold">
+          <span class="material-symbols-outlined text-[20px] text-rose-600">info</span>
+          <span>इन नंबरों पर कॉल कनेक्ट नहीं हो सकी — नीचे 1-टैप से पुनः कॉल करें:</span>
+        </div>
+        <button onclick="TelephonyUI.redialAllFailed()" class="px-3 py-1.5 rounded-xl bg-rose-600 text-white font-bold active:scale-95 shadow-xs cursor-pointer">
+          सबको दोबारा कॉल लगाएं
+        </button>
+      </div>
+    ` + calls.map(c => `
+      <div class="p-4 bg-white rounded-2xl border-2 border-rose-200 shadow-xs flex flex-col gap-3">
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+              <span class="material-symbols-outlined text-[22px]">phone_missed</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-slate-900 text-sm">${c.customerName || 'ग्राहक'}</span>
+                <span class="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-bold">
+                  ❌ फोन नहीं उठा / व्यस्त
+                </span>
+              </div>
+              <p class="text-xs font-mono font-bold text-slate-700 mt-0.5">${c.phone}</p>
+            </div>
+          </div>
+          <span class="text-xs text-slate-400 font-medium">${c.time}</span>
+        </div>
+
+        <div class="bg-rose-50/60 p-2.5 rounded-xl border border-rose-100 text-xs text-rose-800">
+          <strong>कारण:</strong> ग्राहक ने फोन नहीं उठाया या नेटवर्क व्यस्त था।
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+          <button onclick="TelephonyUI.redialCustomer('${c.phone}', '${c.customerName}')" class="h-10 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs active:scale-95 cursor-pointer">
+            <span class="material-symbols-outlined text-[18px]">call</span>
+            <span>📞 पुनः कॉल करें</span>
+          </button>
+          <a href="https://wa.me/${c.phone.replace(/\D/g, '')}?text=नमस्ते%20जी,%20रामकुमार%20भंडार%20से%20आपकी%20कॉल%20नहीं%20लग%20सकी।%20कृपया%20सुविधानुसार%20संपर्क%20करें।" target="_blank" class="h-10 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center justify-center gap-1 border border-emerald-200 active:scale-95">
+            <span class="material-symbols-outlined text-[18px] text-emerald-700">chat</span>
+            <span>💬 व्हाट्सएप भेजें</span>
+          </a>
+        </div>
+      </div>
+    `).join('');
+  },
+
+  // 4. PENDING CALLS TAB (कॉल बाकी - उधार ग्राहक)
+  renderPendingTab(customers, container) {
+    if (customers.length === 0) {
+      container.innerHTML = `
+        <div class="p-8 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200">
+          <span class="material-symbols-outlined text-[40px] text-emerald-600">task_alt</span>
+          <p class="font-bold text-slate-800 text-sm">सभी उधारी ग्राहकों को कॉल लग चुकी है!</p>
+          <p class="text-xs text-slate-500">कोई भी बकायादार ग्राहक शेष नहीं है</p>
+        </div>
+      `;
+      return;
+    }
+
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    const selectedCount = this.selectedInTab.size;
+    const countEl = document.getElementById('call-tab-selected-count');
+    if (countEl) countEl.innerText = selectedCount;
+
+    container.innerHTML = customers.map(c => {
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      const isChecked = this.selectedInTab.has(c.id);
+
+      return `
+        <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-3">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-5 h-5 rounded accent-emerald-700 cursor-pointer shrink-0"/>
+              <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-base shrink-0">
+                ${(c.name || 'ग').charAt(0)}
+              </div>
+              <div class="min-w-0">
+                <h4 class="font-bold text-slate-900 text-sm truncate">${c.name}</h4>
+                <p class="text-xs text-slate-500 font-medium flex items-center gap-1">
+                  <span>${c.phone || 'नंबर नहीं'}</span>
+                  ${c.village ? `<span>• ${c.village}</span>` : ''}
+                </p>
+              </div>
+            </div>
+            <div class="text-right shrink-0">
+              <span class="text-[11px] font-bold text-rose-700 uppercase block">बाकी राशि</span>
+              <span class="font-numeric-display font-extrabold text-base text-rose-700">₹${due.toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+            <button onclick="TelephonyUI.startBatchAutoDial([{ id: '${c.id}', name: '${c.name}', phone: '${c.phone}', due: ${due}, shopId: '${shopId}' }])" class="flex-1 h-9 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[16px]">smart_toy</span>
+              <span>📞 1-टैप AI कॉल लगाएं</span>
+            </button>
+            <a href="https://wa.me/${(c.phone || '').replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.name)}%20जी,%20रामकुमार%20भंडार%20से%20सूचना%20है।%20आपके%20खाते%20में%20₹${due}%20का%20बकाया%20है।" target="_blank" class="h-9 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200 active:scale-95">
+              <span class="material-symbols-outlined text-[16px] text-emerald-700">chat</span>
+              <span>व्हाट्सऐप</span>
+            </a>
+          </div>
+        </div>
+      `;
+    }).join('');
   },
 
   renderCallCard(c) {
-    const isUrgent = c.isUrgent;
-    const stripeColor = isUrgent ? 'bg-error' : (c.shopId === 'krishi' ? 'bg-primary' : 'bg-secondary');
-    const badgeColor = isUrgent ? 'bg-error-container text-on-error-container' : 'bg-tertiary-fixed text-on-tertiary-fixed-variant';
-    const badgeIcon = isUrgent ? 'phone_callback' : 'check_circle';
-    const wingLabel = c.shopId === 'krishi' ? 'कृषि दुकान विंग' : 'किराना विंग';
+    const isOutbound = c.direction === 'outbound';
+    const isConn = c.isConnected;
+    const dirIcon = isOutbound ? 'call_made' : 'call_received';
+    const dirColor = isOutbound ? 'text-indigo-700 bg-indigo-50 border-indigo-200' : 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    const dirLabel = isOutbound ? 'आउटगोइंग तकादा' : 'इनकमिंग पूछताछ';
+    
+    const durationStr = c.durationMin > 0 ? `${c.durationMin} मिनट ${c.durationSec} सेकंड` : `${c.durationSec} सेकंड`;
+    const statusBadge = isConn 
+      ? `<span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px]">✅ बात हुई (${durationStr})</span>`
+      : `<span class="px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 border border-rose-300 font-bold text-[10px]">❌ अनुत्तरित / नहीं उठा</span>`;
 
     return `
-      <div class="w-full bg-surface-container-lowest rounded-xl shadow-md overflow-hidden flex flex-col">
-        <div class="flex">
-          <div class="w-1.5 ${stripeColor} flex-shrink-0"></div>
-          <div class="flex-1 p-space-md flex flex-col gap-space-sm">
-            <div class="flex items-start justify-between gap-space-xs">
-              <div class="flex flex-col min-w-0">
-                <div class="flex items-center gap-1.5">
-                  <span class="font-label-lg text-label-lg text-on-surface truncate">${c.customerName || 'अज्ञात ग्राहक'}</span>
-                  <span class="px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant font-label-sm text-label-sm">${c.role || 'ग्राहक'}</span>
-                </div>
-                <span class="font-body-sm text-body-sm text-on-surface-variant">${c.date || 'आज'} • ${wingLabel}</span>
-              </div>
-              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full ${badgeColor} font-label-sm text-label-sm flex-shrink-0">
-                <span class="material-symbols-outlined text-[14px]">${badgeIcon}</span>
-                ${c.statusLabel || (isUrgent ? 'वापस फोन करें' : 'सफल बात')}
-              </span>
+      <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2.5">
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center ${dirColor} border shrink-0">
+              <span class="material-symbols-outlined text-[20px]">${dirIcon}</span>
             </div>
-
-            <div class="bg-surface-container-low rounded-lg p-space-sm flex flex-col gap-1.5">
-              <div class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-[18px] text-on-surface-variant mt-0.5 flex-shrink-0">record_voice_over</span>
-                <div class="font-body-sm text-body-sm text-on-surface">
-                  <strong class="font-label-md text-label-md text-on-surface">ग्राहक ने पूछा:</strong>
-                  "${c.transcriptUser || 'दुकान खुली है क्या?'}"
-                </div>
-              </div>
-              <div class="flex items-start gap-2 pt-1">
-                <span class="material-symbols-outlined text-[18px] text-primary mt-0.5 flex-shrink-0">smart_toy</span>
-                <div class="font-body-sm text-body-sm text-on-surface">
-                  <strong class="font-label-md text-label-md text-primary">एआई ने बताया:</strong>
-                  "${c.transcriptAi || 'दुकान खुली है'}"
-                </div>
-              </div>
-            </div>
-
-            <div class="flex items-center justify-between px-space-sm py-2 rounded-lg bg-surface-container">
+            <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center active:scale-90 transition-transform">
-                  <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
-                </button>
-                <div class="flex flex-col">
-                  <span class="font-label-sm text-label-sm text-on-surface">ऑडियो रिकॉर्डिंग सुनें</span>
-                  <span class="font-body-sm text-body-sm text-on-surface-variant">अवधि: ${c.audioDuration || '0:35 मिनट'}</span>
-                </div>
+                <span class="font-bold text-slate-900 text-sm md:text-base">${c.customerName || c.phone}</span>
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${dirColor} border">
+                  ${dirLabel}
+                </span>
               </div>
-              <div class="flex items-center gap-0.5 h-5 px-2">
-                <span class="w-1 h-2 bg-outline rounded-full"></span>
-                <span class="w-1 h-4 bg-primary rounded-full"></span>
-                <span class="w-1 h-5 bg-primary rounded-full"></span>
-                <span class="w-1 h-3 bg-primary rounded-full"></span>
-                <span class="w-1 h-4 bg-outline rounded-full"></span>
-              </div>
+              <span class="text-xs text-slate-500 font-medium">${c.phone} • ${c.time}</span>
             </div>
+          </div>
+          <div class="shrink-0">${statusBadge}</div>
+        </div>
 
-            <div class="grid grid-cols-2 gap-space-sm pt-1">
-              <a class="min-h-[48px] py-2 px-3 rounded-xl bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-1.5 shadow active:scale-98 transition-transform" href="tel:${c.phone || '+919826000000'}">
-                <span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">call</span>
-                <span>अभी फोन करें</span>
-              </a>
-              <a class="min-h-[48px] py-2 px-3 rounded-xl bg-surface-container-high text-primary font-label-md text-label-md flex items-center justify-center gap-1.5 shadow-sm active:scale-98 transition-transform" href="https://wa.me/${c.phone ? c.phone.replace(/[^\d]/g, '') : ''}?text=नमस्ते%20जी,%20रामकुमार%20भंडार%20से%20आपकी%20कॉल%20के%20संदर्भ%20में।">
-                <span class="material-symbols-outlined text-[20px]">chat</span>
-                <span>व्हाट्सऐप जवाब</span>
-              </a>
-            </div>
+        ${c.summary ? `
+          <div class="p-2.5 bg-slate-50 rounded-xl text-xs text-slate-700 border border-slate-200">
+            <strong class="text-slate-900">📝 बातचीत सारांश:</strong> ${c.summary}
+          </div>
+        ` : ''}
+
+        ${c.transcript ? `
+          <div class="p-2.5 bg-indigo-50/40 rounded-xl text-xs text-indigo-950 border border-indigo-100">
+            <strong class="text-indigo-900">🎙️ ट्रांसक्रिप्ट:</strong> "${c.transcript}"
+          </div>
+        ` : ''}
+
+        <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs gap-2">
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            ${c.audioUrl ? `
+              <audio controls preload="none" class="w-full max-w-[220px] h-8 rounded-lg" src="${c.audioUrl}"></audio>
+            ` : `
+              <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-8 px-3 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold flex items-center gap-1 border border-emerald-200 active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[16px] text-emerald-700">play_arrow</span>
+                <span>रिकॉर्डिंग सुनें</span>
+              </button>
+            `}
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="TelephonyUI.redialCustomer('${c.phone}', '${c.customerName}')" class="h-8 px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[16px]">call</span>
+              <span>कॉल करें</span>
+            </button>
+            <a href="https://wa.me/${c.phone.replace(/\D/g, '')}" target="_blank" class="h-8 w-8 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold flex items-center justify-center">
+              <span class="material-symbols-outlined text-[16px]">chat</span>
+            </a>
           </div>
         </div>
       </div>
     `;
   },
 
+  // ----------------------------------------------------
+  // BACKGROUND AUTO-DIALER QUEUE ENGINE
+  // ----------------------------------------------------
+  startBatchAutoDial(customerList, shopId = null) {
+    if (!Array.isArray(customerList) || customerList.length === 0) {
+      alert('कॉल करने के लिए कोई ग्राहक नहीं चुना गया');
+      return;
+    }
+
+    const validList = customerList.filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    if (validList.length === 0) {
+      alert('चुने हुए ग्राहकों में कोई वैध 10-अंकों का मोबाइल नंबर नहीं मिला');
+      return;
+    }
+
+    this.autoDialQueue = validList;
+    this.autoDialCurrentIndex = 0;
+    this.isAutoDialing = true;
+    this.isAutoDialPaused = false;
+
+    // Show floating banner
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
+    }
+
+    AppState.showToast(`🚀 बैकग्राउंड AI ऑटो-कॉलिंग शुरू: कुल ${validList.length} ग्राहक`);
+    this.processNextAutoDial();
+  },
+
+  async processNextAutoDial() {
+    if (!this.isAutoDialing) return;
+    if (this.isAutoDialPaused) return;
+
+    if (this.autoDialCurrentIndex >= this.autoDialQueue.length) {
+      this.stopAutoDial();
+      AppState.showToast('🎉 सभी (N) ग्राहकों को AI कॉल सफलतापूर्वक लगा दी गई है!');
+      setTimeout(() => this.fetchLiveOmnidimLogs(), 1500);
+      return;
+    }
+
+    const currentCustomer = this.autoDialQueue[this.autoDialCurrentIndex];
+    const total = this.autoDialQueue.length;
+    const currentNum = this.autoDialCurrentIndex + 1;
+
+    // Update banner UI
+    const progressEl = document.getElementById('calling-banner-progress');
+    const targetEl = document.getElementById('calling-banner-current-target');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (progressEl) progressEl.innerText = `📞 AI ऑटो-कॉलिंग जारी है: (${currentNum}/${total})`;
+    if (targetEl) targetEl.innerText = `वर्तमान: ${currentCustomer.name} (${currentCustomer.phone}) • ₹${currentCustomer.due || 0} बाकी`;
+    if (statusEl) {
+      statusEl.innerText = 'कॉल लगाई जा रही है...';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700 animate-pulse';
+    }
+
+    try {
+      await fetch('/api/ai-phone/call-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: currentCustomer.id,
+          customerName: currentCustomer.name,
+          phone: currentCustomer.phone,
+          amount: currentCustomer.due || 0,
+          shopId: currentCustomer.shopId || AppState.currentShopId
+        })
+      });
+
+      if (statusEl) {
+        statusEl.innerText = '✓ निर्देश भेजा गया • अगली कॉल 12s में';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700';
+      }
+    } catch (err) {
+      console.warn('Auto-dial call dispatch failed:', err);
+    }
+
+    this.autoDialCurrentIndex++;
+
+    // Wait 12 seconds before dialing next to respect telephony limits & prevent spamming
+    if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+    this.autoDialTimer = setTimeout(() => {
+      this.processNextAutoDial();
+    }, 12000);
+  },
+
+  pauseOrResumeAutoDial() {
+    this.isAutoDialPaused = !this.isAutoDialPaused;
+    const btn = document.getElementById('calling-banner-pause-btn');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (this.isAutoDialPaused) {
+      if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+      if (btn) btn.innerText = '▶️ पुनः शुरू';
+      if (statusEl) {
+        statusEl.innerText = '⏸️ रुकी हुई है';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-600';
+      }
+      AppState.showToast('AI कॉलिंग रोक दी गई है');
+    } else {
+      if (btn) btn.innerText = '⏸️ रोकें';
+      AppState.showToast('AI कॉलिंग पुनः शुरू');
+      this.processNextAutoDial();
+    }
+  },
+
+  stopAutoDial() {
+    this.isAutoDialing = false;
+    this.isAutoDialPaused = false;
+    this.autoDialQueue = [];
+    if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
+    }
+  },
+
+  redialCustomer(phone, name, amount = 0, shopId = null) {
+    if (confirm(`क्या आप ${name || 'ग्राहक'} (${phone}) को दोबारा AI तकादा कॉल लगाना चाहते हैं?`)) {
+      this.startBatchAutoDial([{
+        id: 'redial_' + Date.now(),
+        name: name || 'ग्राहक',
+        phone,
+        due: amount || 0,
+        shopId: shopId || AppState.currentShopId
+      }]);
+    }
+  },
+
+  redialAllFailed() {
+    // Collect all failed calls and trigger auto-dialer
+    const calls = this.cachedOmniLogs.filter(c => !c.call_duration_in_seconds || c.call_duration_in_seconds === 0);
+    const toDial = calls.map(c => ({
+      id: c.call_id || Math.random(),
+      name: c.customer_name || 'ग्राहक',
+      phone: c.to_number || c.from_number,
+      due: 0,
+      shopId: 'krishi'
+    })).filter(c => c.phone);
+
+    if (toDial.length === 0) {
+      alert('कोई असफल कॉल नंबर नहीं मिला');
+      return;
+    }
+
+    if (confirm(`क्या आप इन सभी ${toDial.length} अनुत्तरित नंबरों पर दोबारा AI कॉल लगाना चाहते हैं?`)) {
+      this.startBatchAutoDial(toDial);
+    }
+  },
+
+  toggleSelectAllInTab(isChecked) {
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    const calledNumbersSet = new Set(this.cachedOmniLogs.map(c => (c.to_number || c.from_number || '').replace(/\D/g, '')));
+    const pending = AppState.customers.filter(c => {
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      const cleanPhone = (c.phone || '').replace(/\D/g, '');
+      return due > 0 && !calledNumbersSet.has(cleanPhone);
+    });
+
+    if (isChecked) {
+      pending.forEach(c => this.selectedInTab.add(c.id));
+    } else {
+      this.selectedInTab.clear();
+    }
+    this.renderCurrentTab();
+  },
+
+  toggleCustomerInTab(custId, isChecked) {
+    if (isChecked) {
+      this.selectedInTab.add(custId);
+    } else {
+      this.selectedInTab.delete(custId);
+    }
+    const countEl = document.getElementById('call-tab-selected-count');
+    if (countEl) countEl.innerText = this.selectedInTab.size;
+  },
+
+  startBatchDialFromTab() {
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    let selected = AppState.customers.filter(c => this.selectedInTab.has(c.id));
+    if (selected.length === 0) {
+      // If none explicitly checked, select all pending
+      const calledNumbersSet = new Set(this.cachedOmniLogs.map(c => (c.to_number || c.from_number || '').replace(/\D/g, '')));
+      selected = AppState.customers.filter(c => {
+        const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+        const cleanPhone = (c.phone || '').replace(/\D/g, '');
+        return due > 0 && !calledNumbersSet.has(cleanPhone);
+      });
+    }
+
+    const toCall = selected.map(c => {
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      return {
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        due,
+        shopId
+      };
+    }).filter(c => c.phone);
+
+    if (toCall.length === 0) {
+      alert('कॉल करने के लिए कोई वैध नंबर नहीं है');
+      return;
+    }
+
+    if (confirm(`क्या आप इन ${toCall.length} ग्राहकों को बैकग्राउंड AI ऑटो-कॉलिंग कतार में डालना चाहते हैं?`)) {
+      this.selectedInTab.clear();
+      this.startBatchAutoDial(toCall, shopId);
+    }
+  },
+
   playSampleAudio(callId) {
     AppState.showToast('🔊 ऑडियो रिकॉर्डिंग चलाई जा रही है...');
-    // Web Audio API Beep/Simulation
     try {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = audioCtx.createOscillator();
@@ -287,7 +800,7 @@ const TelephonyUI = {
       osc.start();
       osc.stop(audioCtx.currentTime + 0.3);
     } catch (e) {
-      // AudioContext not allowed without gesture
+      // AudioContext fallback
     }
   },
 
@@ -365,120 +878,6 @@ const TelephonyUI = {
     } catch (err) {
       alert('कॉल सिम्युलेशन त्रुटि: ' + err.message);
     }
-  },
-
-  async fetchLiveOmnidimLogs() {
-    const container = document.getElementById('omnidim-call-logs-container');
-    if (!container) return;
-    
-    container.innerHTML = `
-      <div class="p-4 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex items-center justify-center gap-2">
-        <span class="material-symbols-outlined text-[18px] animate-spin">sync</span>
-        <span>Omnidimension AI सर्वर से लाइव कॉल लोड हो रही हैं...</span>
-      </div>
-    `;
-
-    try {
-      const res = await fetch('/api/omnidim/call-logs');
-      if (!res.ok) throw new Error('सर्वर से डेटा नहीं मिला');
-      const data = await res.json();
-      const logs = data.logs || [];
-      this.renderLiveOmnidimLogs(logs);
-    } catch (err) {
-      container.innerHTML = `
-        <div class="p-4 bg-rose-50 rounded-2xl text-center text-rose-700 text-xs">
-          ⚠️ कॉल लॉग प्राप्त करने में त्रुटि: ${err.message}
-        </div>
-      `;
-    }
-  },
-
-  renderLiveOmnidimLogs(logs) {
-    const container = document.getElementById('omnidim-call-logs-container');
-    if (!container) return;
-
-    if (!logs || logs.length === 0) {
-      container.innerHTML = `
-        <div class="p-6 bg-white rounded-2xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200">
-          <span class="material-symbols-outlined text-[36px] text-slate-400">call_missed</span>
-          <p class="font-bold text-slate-700 text-sm">अभी कोई लाइव कॉल रिकॉर्ड नहीं है</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = logs.map(call => {
-      const isOutbound = call.call_direction === 'outbound';
-      const dirIcon = isOutbound ? 'call_made' : 'call_received';
-      const dirColor = isOutbound ? 'text-indigo-700 bg-indigo-50 border-indigo-200' : 'text-emerald-700 bg-emerald-50 border-emerald-200';
-      const dirLabel = isOutbound ? 'आउटगोइंग तकादा' : 'इनकमिंग पूछताछ';
-      const phone = call.to_number || call.from_number || 'नंबर उपलब्ध नहीं';
-      const durationSec = call.call_duration_in_seconds || 0;
-      const durationMin = call.call_duration_in_minutes || 0;
-      const durationStr = durationMin > 0 ? `${durationMin} मिनट ${durationSec} सेकंड` : `${durationSec} सेकंड`;
-      const audioUrl = call.internal_recording_url || call.recording_url;
-
-      let convHtml = '';
-      if (call.call_conversation) {
-        convHtml = `
-          <div class="mt-2 p-3 bg-slate-50 rounded-xl text-xs text-slate-700 max-h-36 overflow-y-auto border border-slate-200/80">
-            <span class="font-bold text-slate-900 block mb-1">📝 बातचीत ट्रांसक्रिप्ट:</span>
-            <div class="space-y-1">${call.call_conversation}</div>
-          </div>
-        `;
-      } else if (call.sentiment_analysis_details) {
-        convHtml = `
-          <div class="mt-2 p-2.5 bg-slate-50 rounded-xl text-xs text-slate-700 border border-slate-200">
-            <strong>बातचीत सारांश:</strong> ${call.sentiment_analysis_details}
-          </div>
-        `;
-      }
-
-      return `
-        <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2.5">
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <div class="w-10 h-10 rounded-xl flex items-center justify-center ${dirColor} border flex-shrink-0">
-                <span class="material-symbols-outlined text-[20px]">${dirIcon}</span>
-              </div>
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="font-bold text-slate-900 text-sm md:text-base">${phone}</span>
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${dirColor} border">
-                    ${dirLabel}
-                  </span>
-                </div>
-                <span class="text-xs text-slate-500 font-medium">${call.time_of_call || 'आज'} • ${call.bot_name || 'AI Agent'}</span>
-              </div>
-            </div>
-            <div class="text-right flex-shrink-0">
-              <span class="text-xs font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                ${durationStr}
-              </span>
-            </div>
-          </div>
-
-          ${convHtml}
-
-          <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-            <div class="flex items-center gap-2">
-              ${audioUrl ? `
-                <a href="${audioUrl}" target="_blank" class="h-8 px-3 rounded-lg bg-emerald-700 text-white font-bold flex items-center gap-1 shadow-xs active:scale-95 transition-all">
-                  <span class="material-symbols-outlined text-[16px]">play_arrow</span>
-                  <span>ऑडियो सुनें</span>
-                </a>
-              ` : `
-                <span class="text-slate-400">ऑडियो उपलब्ध नहीं</span>
-              `}
-            </div>
-            <a href="tel:${phone.replace(/[^\d+]/g, '')}" class="h-8 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold flex items-center gap-1">
-              <span class="material-symbols-outlined text-[16px]">phone</span>
-              <span>कॉल करें</span>
-            </a>
-          </div>
-        </div>
-      `;
-    }).join('');
   },
 
   openManualOutboundModal(prefill = {}) {
