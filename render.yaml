@@ -12,4 +12,8 @@ services:
         value: 10000
       - key: OMNIDIM_API_KEY
         value: DBLJu9zg5E2Mahmpp7-vrjrIX8xTAvLeBlIjKDpMMtI
+      - key: GITHUB_BACKUP_TOKEN
+        value: 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
+      - key: GITHUB_BACKUP_GIST_ID
+        value: 64b6b2477878163b5262389ee9fd8429
 

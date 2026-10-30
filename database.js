@@ -635,6 +635,10 @@ class Database {
     } catch (err) {
       fs.writeFileSync(this.filePath, content, 'utf8');
     }
+
+    if (typeof this.onSave === 'function') {
+      try { this.onSave(this.data); } catch (e) {}
+    }
   }
 
   // Atomic transaction runner: rolls back on exception
