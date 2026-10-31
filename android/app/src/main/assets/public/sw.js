@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ramkumar-bhandar-v12-strict-live';
+const CACHE_NAME = 'ramkumar-bhandar-v13-strict-live';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/css/app.css',
@@ -21,7 +21,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => {
+        keys.map((k) => {
           console.log('Purging legacy service worker cache:', k);
           return caches.delete(k);
         })
@@ -55,24 +55,30 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' }).catch(() => {
-        return caches.match('/index.html');
+        return new Response('<!DOCTYPE html><html lang="hi"><head><meta charset="utf-8"/><title>ऑफ़लाइन</title></head><body style="font-family:sans-serif;padding:24px;text-align:center;"><h2>📶 इंटरनेट कनेक्शन नहीं है</h2><p>कृपया इंटरनेट कनेक्ट करके दोबारा ताज़ा करें।</p><button onclick="location.reload()" style="padding:10px 20px;font-size:16px;border-radius:12px;background:#003629;color:#fff;border:none;">🔄 पुनः प्रयास करें</button></body></html>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
       })
     );
     return;
   }
 
-  // 3. Application JavaScript & Styles: Network First with no-store
+  // 3. Application JavaScript: STRICT NETWORK DIRECT (Never serve stale scripts!)
+  if (url.pathname.startsWith('/js/')) {
+    event.respondWith(fetch(event.request, { cache: 'no-store' }));
+    return;
+  }
+
+  // 4. Static Images & Icons: Cache First
   event.respondWith(
-    fetch(event.request, { cache: 'no-store' })
-      .then((networkResponse) => {
+    caches.match(event.request).then((cached) => {
+      return cached || fetch(event.request).then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
           const clone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return networkResponse;
-      })
-      .catch(() => {
-        return caches.match(event.request);
-      })
+      });
+    })
   );
 });

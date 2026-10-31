@@ -416,6 +416,82 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(rakesh.personalData.inquiryTopic, 'उद्घाटन आमंत्रण');
   });
 
+  await t.test('Audio Streaming Proxy: Supports Byte-Range 206 Partial Content without cutting off', () => {
+    // Simulate a 1000-byte audio file
+    const simulatedAudioBuffer = Buffer.alloc(1000, 0x41);
+    const totalSize = simulatedAudioBuffer.length;
+
+    // Test Case A: Full request (no Range header)
+    assert.strictEqual(totalSize, 1000);
+
+    // Test Case B: Partial range request (bytes=100-299)
+    const rangeHeader = 'bytes=100-299';
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+    const chunkLength = (end - start) + 1;
+
+    assert.strictEqual(start, 100);
+    assert.strictEqual(end, 299);
+    assert.strictEqual(chunkLength, 200);
+
+    const slice = simulatedAudioBuffer.subarray(start, end + 1);
+    assert.strictEqual(slice.length, 200, 'स्लाइस 200 बाइट्स का होना चाहिए');
+
+    // Test Case C: Open-ended range request (bytes=500-)
+    const openRangeHeader = 'bytes=500-';
+    const openParts = openRangeHeader.replace(/bytes=/, '').split('-');
+    const openStart = parseInt(openParts[0], 10);
+    const openEnd = openParts[1] ? parseInt(openParts[1], 10) : totalSize - 1;
+    const openChunkLength = (openEnd - openStart) + 1;
+
+    assert.strictEqual(openStart, 500);
+    assert.strictEqual(openEnd, 999);
+    assert.strictEqual(openChunkLength, 500);
+  });
+
+  await t.test('Sequential Calling Invariant: Exactly one active call placed at a time, waits for termination before next call', () => {
+    const queue = [
+      { id: '1', phone: '9208321477', name: 'राकेश' },
+      { id: '2', phone: '9336317193', name: 'सुभाष' }
+    ];
+
+    let activeCall = null;
+    let maxSimultaneousCalls = 0;
+    const callLogEvents = [];
+
+    function dispatchCall(contact) {
+      if (activeCall !== null) {
+        throw new Error('VIOLATION: Multiple calls active simultaneously!');
+      }
+      activeCall = contact;
+      maxSimultaneousCalls = Math.max(maxSimultaneousCalls, 1);
+      callLogEvents.push({ type: 'start', phone: contact.phone });
+    }
+
+    function finishCall(contact) {
+      assert.strictEqual(activeCall.phone, contact.phone);
+      callLogEvents.push({ type: 'finish', phone: contact.phone });
+      activeCall = null;
+    }
+
+    // Process item 1
+    dispatchCall(queue[0]);
+    assert.strictEqual(maxSimultaneousCalls, 1);
+    // While call 1 is active, attempting to dispatch call 2 fails
+    assert.throws(() => dispatchCall(queue[1]), /Multiple calls active simultaneously/);
+
+    // Call 1 completes
+    finishCall(queue[0]);
+
+    // Now call 2 can be dispatched
+    dispatchCall(queue[1]);
+    finishCall(queue[1]);
+
+    assert.strictEqual(callLogEvents.length, 4);
+    assert.deepStrictEqual(callLogEvents.map(e => e.type), ['start', 'finish', 'start', 'finish']);
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

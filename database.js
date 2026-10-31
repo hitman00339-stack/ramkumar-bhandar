@@ -1593,7 +1593,7 @@ class Database {
         campEntry.durationSec = durationSec;
         campEntry.durationStr = durationSec > 0 ? `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}` : '01:00';
         campEntry.summary = direction === 'inbound' 
-          ? `✅ कॉलबैक (सफल बातचीत): ${summary || 'ग्राहक ने वापस कॉल किया, संदेश प्राप्त'}`
+          ? ('✅ कॉलबैक (सफल बातचीत): ' + (summary || 'ग्राहक ने वापस कॉल किया, संदेश प्राप्त'))
           : (summary || 'सफल बातचीत पूरी हुई');
         campEntry.lastCallAt = now;
         if (audioUrl) campEntry.audioUrl = audioUrl;

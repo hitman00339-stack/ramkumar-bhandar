@@ -779,6 +779,96 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5.0.1 OMNIDIMENSION AUDIO RECORDING STREAMING PROXY
+// Full HTTP 206 Partial Content & Range Header Support
+// Solves audio cutting off / stopping mid-way in browsers
+// ----------------------------------------------------
+const audioBufferCache = new Map();
+
+app.get('/api/omnidim/audio-proxy', async (req, res) => {
+  try {
+    let targetUrl = req.query.url;
+    if (!targetUrl) {
+      return res.status(400).send('Missing url parameter');
+    }
+
+    if (targetUrl.startsWith('/')) {
+      targetUrl = 'https://omnidim.io' + targetUrl;
+    }
+
+    // Security check: only allow Omnidim domains
+    try {
+      const parsed = new URL(targetUrl);
+      if (!parsed.hostname.endsWith('omnidim.io')) {
+        return res.status(403).send('Forbidden audio host');
+      }
+    } catch (e) {
+      return res.status(400).send('Invalid audio URL');
+    }
+
+    // Get or fetch audio buffer
+    let audioBuffer = audioBufferCache.get(targetUrl);
+    if (!audioBuffer) {
+      const response = await fetch(targetUrl);
+      if (!response.ok) {
+        return res.status(response.status).send('Audio not found on Omnidimension');
+      }
+      const arrayBuf = await response.arrayBuffer();
+      audioBuffer = Buffer.from(arrayBuf);
+      
+      // Cache up to 100 recent recordings (~50-100MB max)
+      if (audioBufferCache.size > 100) {
+        const oldestKey = audioBufferCache.keys().next().value;
+        audioBufferCache.delete(oldestKey);
+      }
+      audioBufferCache.set(targetUrl, audioBuffer);
+    }
+
+    const totalSize = audioBuffer.length;
+    const rangeHeader = req.headers.range;
+
+    if (rangeHeader) {
+      // Parse Range header e.g. "bytes=32768-" or "bytes=32768-65535"
+      const parts = rangeHeader.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+      if (isNaN(start) || start >= totalSize || (end !== undefined && end >= totalSize)) {
+        res.setHeader('Content-Range', `bytes */${totalSize}`);
+        return res.status(416).send('Requested range not satisfiable');
+      }
+
+      const chunkLength = (end - start) + 1;
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkLength,
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*'
+      });
+
+      res.end(audioBuffer.subarray(start, end + 1));
+    } else {
+      res.writeHead(200, {
+        'Accept-Ranges': 'bytes',
+        'Content-Length': totalSize,
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*'
+      });
+
+      res.end(audioBuffer);
+    }
+  } catch (err) {
+    console.warn('Audio proxy error:', err.message);
+    if (!res.headersSent) {
+      res.status(500).send('Audio streaming error: ' + err.message);
+    }
+  }
+});
+
+// ----------------------------------------------------
 // 5.1.0 PERMANENT CONTACTS DIRECTORY (स्थायी संपर्क डायरेक्टरी)
 // Strictly deduplicated by 10-digit Indian mobile number
 // ----------------------------------------------------
