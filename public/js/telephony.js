@@ -37,16 +37,43 @@ const TelephonyUI = {
 
   init() {
     this.setupListeners();
-    this.fetchLiveOmnidimLogs();
-    this.fetchCampaignContacts();
-    this.fetchContactsBook();
 
-    // Auto-refresh Omnidimension logs every 20 seconds when visible
+    // 1. INSTANT OFFLINE-FIRST RESTORE FROM LOCALSTORAGE (Zero latency display!)
+    try {
+      const savedLogs = localStorage.getItem('rb_cached_omni_logs');
+      if (savedLogs) this.cachedOmniLogs = JSON.parse(savedLogs);
+
+      const savedContacts = localStorage.getItem('rb_cached_contacts_book');
+      if (savedContacts) this.contactsBook = JSON.parse(savedContacts);
+
+      const savedCamp = localStorage.getItem('rb_cached_campaign_contacts');
+      if (savedCamp) this.campaignContacts = JSON.parse(savedCamp);
+    } catch (e) {
+      console.warn('LocalStorage restore error:', e);
+    }
+
+    // 2. Render IMMEDIATELY from cached state (Instant numbers and table!)
+    this.updateContactsBookBadges();
+    this.renderCurrentTab();
+
+    // 3. Smooth background fetch over internet
+    this.refreshAllData();
+
+    // 4. Auto-refresh Omnidimension logs every 20 seconds when visible
     setInterval(() => {
       if (document.visibilityState === 'visible' && !this.isAutoDialing && !this.isCampaignCalling) {
         this.fetchLiveOmnidimLogs(true);
       }
     }, 20000);
+  },
+
+  async refreshAllData() {
+    await Promise.allSettled([
+      this.fetchContactsBook(),
+      this.fetchCampaignContacts(),
+      this.fetchLiveOmnidimLogs(true)
+    ]);
+    this.renderCurrentTab();
   },
 
   setupListeners() {
@@ -303,7 +330,7 @@ const TelephonyUI = {
 
   async fetchLiveOmnidimLogs(silent = false) {
     const container = document.getElementById('omnidim-call-logs-container');
-    if (!silent && container && this.cachedOmniLogs.length === 0) {
+    if (!silent && container && (!this.cachedOmniLogs || this.cachedOmniLogs.length === 0)) {
       container.innerHTML = `
         <div class="p-8 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex items-center justify-center gap-2 border border-slate-200">
           <span class="material-symbols-outlined text-[20px] animate-spin text-emerald-700">sync</span>
@@ -313,10 +340,13 @@ const TelephonyUI = {
     }
 
     try {
-      const res = await fetch('/api/omnidim/call-logs?pagesize=50');
+      const res = await fetch('/api/omnidim/call-logs');
       if (res.ok) {
         const data = await res.json();
         this.cachedOmniLogs = data.logs || [];
+        try {
+          localStorage.setItem('rb_cached_omni_logs', JSON.stringify(this.cachedOmniLogs));
+        } catch (e) {}
       }
     } catch (err) {
       console.warn('Omnidim live logs fetch skipped:', err.message);
@@ -2183,7 +2213,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       if (res.ok) {
         const data = await res.json();
         this.contactsBook = data.contacts || [];
+        try {
+          localStorage.setItem('rb_cached_contacts_book', JSON.stringify(this.contactsBook));
+        } catch (e) {}
         this.updateContactsBookBadges();
+        this.renderCurrentTab();
       }
     } catch (err) {
       console.warn('Fetch contacts book error:', err.message);
@@ -2326,11 +2360,12 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       if (res.ok) {
         const data = await res.json();
         this.campaignContacts = data.contacts || [];
+        try {
+          localStorage.setItem('rb_cached_campaign_contacts', JSON.stringify(this.campaignContacts));
+        } catch (e) {}
         const bInaug = document.getElementById('badge-count-inauguration');
         if (bInaug) bInaug.innerText = this.campaignContacts.length;
-        if (this.currentCallTab === 'inauguration') {
-          this.renderCurrentTab();
-        }
+        this.renderCurrentTab();
       }
     } catch (err) {
       console.warn('Campaign contacts fetch skipped:', err.message);

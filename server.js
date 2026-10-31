@@ -684,31 +684,72 @@ app.get('/api/omnidim/agents', async (req, res) => {
   }
 });
 
-app.get('/api/omnidim/call-logs', async (req, res) => {
+let isSyncingOmnidim = false;
+async function syncAllOmnidimLogs() {
+  if (isSyncingOmnidim) return;
+  isSyncingOmnidim = true;
   try {
-    const page = req.query.page || 1;
-    const pageSize = req.query.pagesize || 50;
-    const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=${page}&pagesize=${pageSize}`, {
-      headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
-    });
-    const data = await response.json();
-    const logs = data.call_log_data || [];
+    let allLogs = [];
+    let pageno = 1;
+    let hasMore = true;
 
-    // Automatically harvest incoming callers, store number-wise turn-by-turn history,
-    // and resolve callbacks in active campaigns
-    try {
-      db.recordCallHistoryFromLogs(logs);
-    } catch (e) {
-      console.warn('Auto recording logs error:', e.message);
+    while (hasMore && pageno <= 10) {
+      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=${pageno}&pagesize=100`, {
+        headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
+      });
+      if (!response.ok) break;
+      const data = await response.json();
+      const logs = data.call_log_data || [];
+      if (logs.length === 0) break;
+      allLogs.push(...logs);
+      if (allLogs.length >= (data.total_records || 0) || logs.length < 100) {
+        hasMore = false;
+      } else {
+        pageno++;
+      }
     }
 
+    if (allLogs.length > 0) {
+      db.recordCallHistoryFromLogs(allLogs);
+      console.log(`[Omnidim Sync] Successfully ingested ${allLogs.length} call logs into master directory.`);
+    }
+  } catch (err) {
+    console.warn('[Omnidim Sync Error]:', err.message);
+  } finally {
+    isSyncingOmnidim = false;
+  }
+}
+
+// Initial background sync on startup
+setTimeout(syncAllOmnidimLogs, 1500);
+// Recurring background sync every 60 seconds
+setInterval(syncAllOmnidimLogs, 60000);
+
+app.get('/api/omnidim/call-logs', async (req, res) => {
+  try {
+    const forceFresh = req.query.fresh === 'true';
+    const cachedLogs = db.data.omnidimLogsCache || [];
+
+    if (!forceFresh && cachedLogs.length > 0) {
+      res.json({
+        success: true,
+        logs: cachedLogs,
+        totalRecords: cachedLogs.length,
+        fromCache: true
+      });
+      syncAllOmnidimLogs().catch(() => {});
+      return;
+    }
+
+    await syncAllOmnidimLogs();
+    const finalLogs = db.data.omnidimLogsCache || [];
     res.json({
       success: true,
-      logs,
-      totalRecords: data.total_records || 0
+      logs: finalLogs,
+      totalRecords: finalLogs.length
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message, logs: db.data.omnidimLogsCache || [] });
   }
 });
 

@@ -69,6 +69,10 @@ class Database {
           this.data.campaignContacts = [];
           needsSave = true;
         }
+        if (!this.data.omnidimLogsCache) {
+          this.data.omnidimLogsCache = [];
+          needsSave = true;
+        }
         if (needsSave) this.save();
         return;
       } catch (err) {
@@ -1609,6 +1613,26 @@ class Database {
     if (!Array.isArray(logsArray)) return [];
     const botNumber = '8045440103';
     const processed = [];
+
+    // Cache logs inside database (deduplicated by ID)
+    if (!this.data.omnidimLogsCache) this.data.omnidimLogsCache = [];
+    const existingLogMap = new Map();
+    this.data.omnidimLogsCache.forEach(l => {
+      if (l.id) existingLogMap.set(l.id, l);
+    });
+
+    for (const log of logsArray) {
+      if (log.id) {
+        existingLogMap.set(log.id, log);
+      }
+    }
+
+    // Sort logs descending by time/id
+    this.data.omnidimLogsCache = Array.from(existingLogMap.values()).sort((a, b) => {
+      const ta = new Date(a.time_of_call || a.created_at || 0).getTime();
+      const tb = new Date(b.time_of_call || b.created_at || 0).getTime();
+      return tb - ta;
+    });
 
     for (const log of logsArray) {
       const toClean = (log.to_number || '').replace(/\D/g, '');
