@@ -89,8 +89,31 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static frontend files
-app.use(express.static(path.join(__dirname, 'public')));
+// Aggressive anti-caching headers for HTML, Service Worker, and Manifests so browsers never serve stale cached shells
+app.use((req, res, next) => {
+  const p = (req.path || '').toLowerCase();
+  if (p === '/' || p.endsWith('.html') || p === '/sw.js' || p === '/manifest.json') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+  }
+  next();
+});
+
+// Serve static frontend files with strict cache control
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res, filePath) => {
+    const p = filePath.toLowerCase();
+    if (p.endsWith('.html') || p.endsWith('sw.js') || p.endsWith('manifest.json')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 // Optional API Key middleware for AI Telephony and Remote Sync
 function verifyTelephonyAuth(req, res, next) {

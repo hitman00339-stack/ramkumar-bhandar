@@ -1,18 +1,9 @@
-const CACHE_NAME = 'ramkumar-bhandar-v9';
+const CACHE_NAME = 'ramkumar-bhandar-v11-strict-live';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/css/app.css',
   '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/js/app.js',
-  '/js/state.js',
-  '/js/khatabook.js',
-  '/js/inventory.js',
-  '/js/sprayer.js',
-  '/js/voice.js',
-  '/js/telephony.js'
+  '/icons/icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -31,7 +22,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => {
-          console.log('Clearing old service worker cache:', k);
+          console.log('Purging legacy service worker cache:', k);
           return caches.delete(k);
         })
       );
@@ -43,7 +34,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // APIs: Network only, fallback to offline JSON response
+  // 1. APIs: Direct network only, fallback to offline notification
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request).catch(() => {
@@ -60,9 +51,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML and JS: Network First! (Ensures updates appear immediately when online; falls back to cache if offline)
+  // 2. Navigation & HTML: STRICT NETWORK-ONLY (Never serve stale HTML shell!)
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' }).catch(() => {
+        return caches.match('/index.html');
+      })
+    );
+    return;
+  }
+
+  // 3. Application JavaScript & Styles: Network First with no-store
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-store' })
       .then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
           const clone = networkResponse.clone();
@@ -71,9 +72,7 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       })
       .catch(() => {
-        return caches.match(event.request).then((cachedResponse) => {
-          return cachedResponse || caches.match('/index.html');
-        });
+        return caches.match(event.request);
       })
   );
 });

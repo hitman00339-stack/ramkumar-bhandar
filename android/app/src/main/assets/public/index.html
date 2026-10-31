@@ -1,6 +1,29 @@
 <!DOCTYPE html>
 <html lang="hi">
 <head>
+  <script>
+    // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
+    (function() {
+      const CURRENT_VER = 'rb_v11_20261031_live';
+      if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
+        localStorage.setItem('rb_active_version', CURRENT_VER);
+        if ('caches' in window) {
+          caches.keys().then(function(names) {
+            for (let name of names) {
+              caches.delete(name);
+            }
+          });
+        }
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for (let reg of registrations) {
+              reg.unregister();
+            }
+          });
+        }
+      }
+    })();
+  </script>
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
@@ -2006,13 +2029,13 @@
     </div>
   </div>
 
-  <!-- APPLICATION SCRIPTS (Versioned ?v=9 for instant live cache busting) -->
-  <script src="/js/state.js?v=9"></script>
-  <script src="/js/khatabook.js?v=9"></script>
-  <script src="/js/inventory.js?v=9"></script>
-  <script src="/js/voice.js?v=9"></script>
-  <script src="/js/telephony.js?v=9"></script>
-  <script src="/js/sprayer.js?v=9"></script>
-  <script src="/js/app.js?v=9"></script>
+  <!-- APPLICATION SCRIPTS (Versioned ?v=11 for instant live cache busting) -->
+  <script src="/js/state.js?v=11"></script>
+  <script src="/js/khatabook.js?v=11"></script>
+  <script src="/js/inventory.js?v=11"></script>
+  <script src="/js/voice.js?v=11"></script>
+  <script src="/js/telephony.js?v=11"></script>
+  <script src="/js/sprayer.js?v=11"></script>
+  <script src="/js/app.js?v=11"></script>
 </body>
 </html>
