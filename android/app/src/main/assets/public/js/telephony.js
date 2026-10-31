@@ -1,10 +1,39 @@
-// AI Telephony UI and Remote Synchronization Engine
+// AI Telephony UI, Background Auto-Dialer & Spreadsheet Management System
 const TelephonyUI = {
   currentFilter: 'all',
   selectedWing: 'krishi', // 'krishi' | 'kirana'
+  currentCallTab: 'all',  // 'all' | 'connected' | 'failed' | 'pending'
+  currentWingFilter: 'all', // 'all' | 'krishi' | 'kirana'
+  viewMode: 'spreadsheet', // 'spreadsheet' | 'split' | 'cards'
+  searchQuery: '',
+  cachedOmniLogs: [],
+  selectedInTab: new Set(),
+  activeTranscriptCall: null,
+
+  // Background Auto-Dialer State
+  isAutoDialing: false,
+  isAutoDialPaused: false,
+  autoDialQueue: [],
+  autoDialCurrentIndex: 0,
+  autoDialTimer: null,
+
+  // Inauguration Campaign State
+  campaignContacts: [],
+  campaignQueue: [],
+  campaignCurrentIndex: 0,
+  isCampaignCalling: false,
 
   init() {
     this.setupListeners();
+    this.fetchLiveOmnidimLogs();
+    this.fetchCampaignContacts();
+
+    // Auto-refresh Omnidimension logs every 20 seconds when visible
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && !this.isAutoDialing && !this.isCampaignCalling) {
+        this.fetchLiveOmnidimLogs(true);
+      }
+    }, 20000);
   },
 
   setupListeners() {
@@ -14,6 +43,7 @@ const TelephonyUI = {
       refreshBtn.addEventListener('click', () => {
         AppState.retryShopSync(this.selectedWing);
         AppState.fetchCallLogs(this.selectedWing);
+        this.fetchLiveOmnidimLogs();
       });
     }
 
@@ -76,7 +106,7 @@ const TelephonyUI = {
     this.renderMasterCard();
     this.renderSyncBanner();
     this.renderInquiryTopics();
-    this.renderCallLogs();
+    this.renderCurrentTab();
   },
 
   renderMasterCard() {
@@ -151,7 +181,7 @@ const TelephonyUI = {
           <span class="font-body-sm text-body-sm text-on-surface-variant truncate">${syncText}</span>
         </div>
       </div>
-      <button onclick="AppState.retryShopSync('${this.selectedWing}')" class="px-space-sm py-1 rounded bg-surface-container-high text-primary font-label-sm text-label-sm flex-shrink-0 active:scale-95 transition-transform">
+      <button onclick="AppState.retryShopSync('${this.selectedWing}')" class="px-space-sm py-1 rounded bg-surface-container-high text-primary font-label-sm text-label-sm flex-shrink-0 active:scale-95 transition-transform cursor-pointer">
         ताज़ा करें
       </button>
     `;
@@ -174,107 +204,1913 @@ const TelephonyUI = {
     `).join('');
   },
 
-  renderCallLogs() {
-    const container = document.getElementById('call-logs-container');
-    if (!container) return;
-
-    let logs = AppState.callLogs.filter(c => !this.selectedWing || c.shopId === this.selectedWing);
-
-    if (logs.length === 0) {
-      container.innerHTML = `
-        <div class="p-space-lg bg-surface-container-lowest rounded-xl text-center flex flex-col items-center justify-center gap-2 shadow-sm">
-          <span class="material-symbols-outlined text-[36px] text-outline-variant">phone_missed</span>
-          <p class="font-headline-sm text-on-surface">कोई कॉल लॉग नहीं है</p>
-          <p class="font-body-sm text-on-surface-variant">कॉल आते ही सारांश और ऑडियो यहाँ दिखेगा</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = logs.map(c => this.renderCallCard(c)).join('');
+  // ----------------------------------------------------
+  // SPREADSHEET VIEW MODES & FILTERS
+  // ----------------------------------------------------
+  switchViewMode(mode) {
+    this.viewMode = mode;
+    const modes = ['spreadsheet', 'split', 'cards'];
+    modes.forEach(m => {
+      const btn = document.getElementById(`btn-view-${m}`);
+      if (btn) {
+        if (m === mode) {
+          btn.className = "px-3 py-1.5 rounded-lg bg-white shadow-xs text-slate-900 font-bold flex items-center gap-1 cursor-pointer";
+        } else {
+          btn.className = "px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 font-medium flex items-center gap-1 cursor-pointer";
+        }
+      }
+    });
+    this.renderCurrentTab();
   },
 
-  renderCallCard(c) {
-    const isUrgent = c.isUrgent;
-    const stripeColor = isUrgent ? 'bg-error' : (c.shopId === 'krishi' ? 'bg-primary' : 'bg-secondary');
-    const badgeColor = isUrgent ? 'bg-error-container text-on-error-container' : 'bg-tertiary-fixed text-on-tertiary-fixed-variant';
-    const badgeIcon = isUrgent ? 'phone_callback' : 'check_circle';
-    const wingLabel = c.shopId === 'krishi' ? 'कृषि दुकान विंग' : 'किराना विंग';
+  switchCallTab(tab) {
+    this.currentCallTab = tab;
+    this.selectedInTab.clear();
+
+    const tabs = ['all', 'connected', 'failed', 'pending', 'total_all', 'inauguration'];
+    tabs.forEach(t => {
+      const btn = document.getElementById(`tab-btn-${t}`);
+      if (btn) {
+        if (t === tab) {
+          btn.className = "shrink-0 h-10 px-3 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all font-bold cursor-pointer";
+        } else {
+          btn.className = "shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all font-semibold cursor-pointer";
+        }
+      }
+    });
+
+    this.renderCurrentTab();
+  },
+
+  switchCallWingFilter(wing) {
+    this.currentWingFilter = wing;
+    const wings = ['all', 'krishi', 'kirana'];
+    wings.forEach(w => {
+      const btn = document.getElementById(`btn-call-wing-${w}`);
+      if (btn) {
+        if (w === wing) {
+          btn.className = "px-2.5 py-1.5 rounded-lg bg-white shadow-xs text-slate-900 font-bold cursor-pointer";
+        } else {
+          btn.className = "px-2.5 py-1.5 rounded-lg text-slate-600 font-medium hover:text-slate-900 cursor-pointer";
+        }
+      }
+    });
+    this.renderCurrentTab();
+  },
+
+  handleSearch(val) {
+    this.searchQuery = (val || '').trim().toLowerCase();
+    this.renderCurrentTab();
+  },
+
+  setMobileSection(sec) {
+    const tableSec = document.getElementById('section-spreadsheet-table');
+    const unconnSec = document.getElementById('section-unconnected-column');
+    const btnTable = document.getElementById('btn-mobile-sec-table');
+    const btnUnconn = document.getElementById('btn-mobile-sec-unconn');
+
+    if (!tableSec || !unconnSec) return;
+
+    if (sec === 'unconnected') {
+      tableSec.classList.add('hidden');
+      tableSec.classList.remove('flex');
+      unconnSec.classList.remove('hidden');
+      unconnSec.classList.add('flex');
+      if (btnTable) btnTable.className = "flex-1 py-2 rounded-lg text-slate-600 flex items-center justify-center gap-1";
+      if (btnUnconn) btnUnconn.className = "flex-1 py-2 rounded-lg bg-rose-700 text-white shadow-xs font-bold flex items-center justify-center gap-1";
+    } else {
+      unconnSec.classList.add('hidden');
+      unconnSec.classList.remove('flex');
+      tableSec.classList.remove('hidden');
+      tableSec.classList.add('flex');
+      if (btnTable) btnTable.className = "flex-1 py-2 rounded-lg bg-white shadow-xs text-slate-900 font-bold flex items-center justify-center gap-1";
+      if (btnUnconn) btnUnconn.className = "flex-1 py-2 rounded-lg text-rose-700 flex items-center justify-center gap-1 font-semibold";
+    }
+  },
+
+  async fetchLiveOmnidimLogs(silent = false) {
+    const container = document.getElementById('omnidim-call-logs-container');
+    if (!silent && container && this.cachedOmniLogs.length === 0) {
+      container.innerHTML = `
+        <div class="p-8 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex items-center justify-center gap-2 border border-slate-200">
+          <span class="material-symbols-outlined text-[20px] animate-spin text-emerald-700">sync</span>
+          <span>Omnidimension AI सर्वर से लाइव कॉल स्प्रेडशीट लोड हो रही है...</span>
+        </div>
+      `;
+    }
+
+    try {
+      const res = await fetch('/api/omnidim/call-logs?pagesize=50');
+      if (res.ok) {
+        const data = await res.json();
+        this.cachedOmniLogs = data.logs || [];
+      }
+    } catch (err) {
+      console.warn('Omnidim live logs fetch skipped:', err.message);
+    }
+    this.renderCurrentTab();
+  },
+
+  // Process & Merge All Omnidim Calls + Local Calls + Pending Customers
+  getProcessedData() {
+    const botNumber = '8045440103';
+
+    const omniCalls = this.cachedOmniLogs.map(c => {
+      const durationSec = c.call_duration_in_seconds || 0;
+      const durationMin = c.call_duration_in_minutes || 0;
+      const rawStatus = (c.call_status || '').toLowerCase();
+      const isOutbound = c.call_direction === 'outbound';
+
+      // Accurate Phone Resolution
+      const toClean = (c.to_number || '').replace(/\D/g, '');
+      const fromClean = (c.from_number || '').replace(/\D/g, '');
+      let phone = '';
+      let isWebCall = false;
+
+      if (c.from_number === 'Web Call' || c.to_number === 'Web Call' || c.call_type === 'web_call') {
+        isWebCall = true;
+        phone = '🌐 वेब टेस्ट कॉल';
+      } else if (toClean.includes(botNumber)) {
+        // Customer called our bot
+        phone = c.from_number || 'अज्ञात नंबर';
+      } else if (fromClean.includes(botNumber)) {
+        // Bot called customer
+        phone = c.to_number || 'अज्ञात नंबर';
+      } else if (c.call_direction === 'inbound') {
+        phone = c.from_number || c.to_number || 'इनकमिंग नंबर';
+      } else {
+        phone = c.to_number || c.from_number || 'आउटगोइंग नंबर';
+      }
+
+      // Format Indian mobile number nicely
+      let formattedPhone = phone;
+      const cleanDigits = phone.replace(/\D/g, '');
+      if (cleanDigits.length === 10) {
+        formattedPhone = `+91 ${cleanDigits.slice(0, 5)} ${cleanDigits.slice(5)}`;
+      } else if (cleanDigits.length === 12 && cleanDigits.startsWith('91')) {
+        formattedPhone = `+91 ${cleanDigits.slice(2, 7)} ${cleanDigits.slice(7)}`;
+      }
+
+      // Customer Lookup from Shop Database
+      let matchedCust = null;
+      if (cleanDigits.length >= 10) {
+        const last10 = cleanDigits.slice(-10);
+        matchedCust = (AppState.customers || []).find(cust => {
+          const cd = (cust.phone || '').replace(/\D/g, '');
+          return cd && cd.endsWith(last10);
+        });
+      }
+
+      let customerName = matchedCust ? matchedCust.name : (c.user_name || c.customer_name);
+      if (!customerName || customerName === 'Assistant' || customerName === 'Unknown' || customerName === 'User') {
+        if (isWebCall) customerName = 'वेब ब्राउज़र टेस्ट';
+        else if (c.call_direction === 'inbound') customerName = 'इनकमिंग किसान / ग्राहक';
+        else customerName = 'उधार खाता ग्राहक';
+      }
+
+      const village = matchedCust?.village || '';
+      const dueAmount = matchedCust ? (matchedCust.balancesRupees?.[AppState.currentShopId] || (matchedCust.balances?.[AppState.currentShopId] ? matchedCust.balances[AppState.currentShopId] / 100 : 0) || 0) : 0;
+
+      // Duration & Connected Status
+      const totalSec = (durationMin * 60) + durationSec;
+      const isConnected = totalSec > 0 && rawStatus !== 'no-answer' && rawStatus !== 'busy' && rawStatus !== 'failed';
+      const isFailed = !isConnected;
+
+      let durationStr = '00:00';
+      if (totalSec > 0) {
+        const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+        const ss = String(totalSec % 60).padStart(2, '0');
+        durationStr = `${mm}:${ss}`;
+      }
+
+      // Failure Reason
+      let failReason = '';
+      if (isFailed) {
+        if (rawStatus === 'no-answer') failReason = 'घंटी बजी पर नहीं उठा (No Answer)';
+        else if (rawStatus === 'busy') failReason = 'फोन व्यस्त था / काटा (Busy)';
+        else if (rawStatus === 'failed') failReason = 'नेटवर्क या फोन बंद था (Failed)';
+        else failReason = 'कॉल कनेक्ट नहीं हुई (00:00)';
+      }
+
+      // Audio Recording URL
+      let recUrl = c.internal_recording_url || c.recording_url;
+      if (recUrl && recUrl.startsWith('/')) {
+        recUrl = 'https://omnidim.io' + recUrl;
+      }
+
+      // Meaningful Summary
+      let summaryText = '';
+      if (typeof c.sentiment_analysis_details === 'string' && c.sentiment_analysis_details.trim()) {
+        summaryText = c.sentiment_analysis_details.trim();
+      } else if (typeof c.call_summary === 'string' && c.call_summary.trim()) {
+        summaryText = c.call_summary.trim();
+      } else if (c.call_conversation && c.call_conversation.trim()) {
+        const lines = c.call_conversation.split(/<br\s*\/?>|\n/).map(l => l.trim()).filter(Boolean);
+        const userLine = lines.find(l => l.toLowerCase().startsWith('user:') || l.toLowerCase().startsWith('caller:'));
+        if (userLine) {
+          summaryText = `ग्राहक पूछताछ: "${userLine.replace(/^(user:|caller:)/i, '').trim().substring(0, 80)}"`;
+        } else {
+          summaryText = isConnected ? `सफल बातचीत पूरी हुई (${durationStr})` : failReason;
+        }
+      } else {
+        summaryText = isConnected ? `कॉल पूरी हुई • अवधि ${durationStr}` : (failReason || 'कॉल कनेक्ट नहीं हुई');
+      }
+
+      return {
+        id: String(c.id || ('omni_' + Math.random())),
+        phone: formattedPhone,
+        rawPhone: isWebCall ? '' : phone,
+        customerName,
+        village,
+        dueAmount,
+        shopId: 'krishi',
+        direction: isOutbound ? 'outbound' : 'inbound',
+        durationSec: totalSec,
+        durationMin,
+        durationStr,
+        isConnected,
+        isFailed,
+        failReason,
+        statusText: isConnected ? '✅ बात हुई' : (rawStatus === 'no-answer' ? '❌ नहीं उठा (00:00)' : (rawStatus === 'busy' ? '❌ व्यस्त (busy)' : '❌ नहीं लगा')),
+        statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
+        time: c.time_of_call || 'आज',
+        summary: summaryText,
+        transcript: c.call_conversation || '',
+        audioUrl: recUrl || null
+      };
+    });
+
+    const localCalls = (AppState.callLogs || []).map(c => {
+      const durationSec = c.durationSec || 0;
+      const isConnected = durationSec > 0 || c.status === 'completed' || c.statusLabel === 'सफल बात';
+      return {
+        id: String(c.id),
+        phone: c.callerNumber || c.phone || 'नंबर नहीं',
+        rawPhone: c.callerNumber || c.phone || '',
+        customerName: c.customerName || 'ग्राहक',
+        village: '',
+        dueAmount: 0,
+        shopId: c.shopTarget || c.shopId || 'krishi',
+        direction: c.direction || 'outbound',
+        durationSec,
+        durationMin: 0,
+        durationStr: durationSec > 0 ? `00:${String(durationSec).padStart(2, '0')}` : '00:00',
+        isConnected,
+        isFailed: !isConnected,
+        failReason: isConnected ? '' : 'कॉल कनेक्ट नहीं हुई',
+        statusText: isConnected ? '✅ बात हुई' : '❌ कॉल नहीं लगी',
+        statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
+        time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : 'आज',
+        summary: c.responseText || 'तकादा संदेश भेजा गया',
+        transcript: c.transcriptUser || c.queryText || '',
+        audioUrl: null
+      };
+    });
+
+    let allCalls = [...omniCalls, ...localCalls];
+
+    // Inauguration Campaign Contacts
+    const inaugurationCalls = (this.campaignContacts || []).map(c => {
+      const isConnected = c.status === 'connected';
+      const isFailed = c.status === 'failed';
+      const isCalling = c.status === 'calling';
+      const isPending = !isConnected && !isFailed && !isCalling;
+
+      let statusText = '⏳ कॉल बाकी';
+      let statusClass = 'bg-amber-100 text-amber-900 border-amber-300';
+      if (isConnected) {
+        statusText = '✅ बात हुई';
+        statusClass = 'bg-emerald-100 text-emerald-900 border-emerald-300';
+      } else if (isFailed) {
+        statusText = '❌ नहीं उठा / नहीं लगा';
+        statusClass = 'bg-rose-100 text-rose-900 border-rose-300';
+      } else if (isCalling) {
+        statusText = '📞 कॉल जारी...';
+        statusClass = 'bg-sky-100 text-sky-900 border-sky-300 animate-pulse';
+      }
+
+      const cleanPhone = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      const formatted = cleanPhone.length === 10 ? `+91 ${cleanPhone.slice(0, 5)} ${cleanPhone.slice(5)}` : (c.phone || cleanPhone);
+
+      return {
+        id: String(c.id),
+        phone: formatted,
+        rawPhone: cleanPhone,
+        customerName: c.name || 'ग्रामवासी / ग्राहक',
+        village: c.campaign || 'उद्घाटन आमंत्रण',
+        dueAmount: 0,
+        shopId: 'kirana',
+        direction: 'outbound',
+        durationSec: c.durationSec || 0,
+        durationMin: 0,
+        durationStr: c.durationStr || (isConnected ? '01:00' : '00:00'),
+        isConnected,
+        isFailed,
+        isPending,
+        isCalling,
+        failReason: isFailed ? 'फोन नहीं उठा या व्यस्त था' : '',
+        statusText,
+        statusClass,
+        time: c.lastCallAt ? new Date(c.lastCallAt).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : (c.addedAt ? 'आज' : 'नया'),
+        summary: c.summary || (isConnected ? 'उद्घाटन आमंत्रण सफल बातचीत' : (isCalling ? '📞 कॉल जारी है...' : 'किराना स्टोर उद्घाटन (4 नवंबर) आमंत्रण')),
+        transcript: c.transcript || '',
+        audioUrl: c.audioUrl || null,
+        isCampaign: true
+      };
+    }).filter(c => {
+      if (!this.searchQuery) return true;
+      return (c.phone && c.phone.includes(this.searchQuery)) ||
+             (c.customerName && c.customerName.toLowerCase().includes(this.searchQuery)) ||
+             (c.summary && c.summary.toLowerCase().includes(this.searchQuery));
+    });
+
+    // Merge attempted campaign calls into allCalls
+    const attemptedCampaignCalls = inaugurationCalls.filter(c => c.isConnected || c.isFailed || c.isCalling);
+    allCalls = [...allCalls, ...attemptedCampaignCalls];
+
+    // Filter by Shop Wing
+    if (this.currentWingFilter !== 'all') {
+      allCalls = allCalls.filter(c => c.shopId === this.currentWingFilter);
+    }
+
+    // Filter by Search Query
+    if (this.searchQuery) {
+      allCalls = allCalls.filter(c => 
+        (c.phone && c.phone.toLowerCase().includes(this.searchQuery)) ||
+        (c.customerName && c.customerName.toLowerCase().includes(this.searchQuery)) ||
+        (c.summary && c.summary.toLowerCase().includes(this.searchQuery)) ||
+        (c.transcript && c.transcript.toLowerCase().includes(this.searchQuery))
+      );
+    }
+
+    // Pending Customers (Have positive balance & haven't been called)
+    const calledPhones = new Set(allCalls.map(c => (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10)).filter(Boolean));
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    const pendingCustomers = (AppState.customers || []).filter(c => {
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      const cleanPhone = (c.phone || '').replace(/\D/g, '').slice(-10);
+      const matchSearch = !this.searchQuery || 
+        (c.name && c.name.toLowerCase().includes(this.searchQuery)) || 
+        (c.phone && c.phone.includes(this.searchQuery)) ||
+        (c.village && c.village.toLowerCase().includes(this.searchQuery));
+      return due > 0 && cleanPhone && !calledPhones.has(cleanPhone) && matchSearch;
+    });
+
+    const connectedCalls = allCalls.filter(c => c.isConnected);
+    const failedCalls = allCalls.filter(c => c.isFailed);
+
+    // Combined Total List: All dialed calls + pending customers + inauguration list
+    const pendingAsCalls = pendingCustomers.map(p => {
+      const due = (p.balancesRupees ? p.balancesRupees[shopId] : (p.balances?.[shopId] ? p.balances[shopId] / 100 : 0)) || 0;
+      return {
+        id: 'pend_' + p.id,
+        phone: p.phone || 'नंबर नहीं',
+        rawPhone: p.phone || '',
+        customerName: p.name,
+        village: p.village || '',
+        dueAmount: due,
+        shopId: p.shopId || shopId,
+        direction: 'pending_outbound',
+        durationSec: 0,
+        durationMin: 0,
+        durationStr: '--',
+        isConnected: false,
+        isFailed: false,
+        isPending: true,
+        failReason: 'अभी कॉल नहीं की गई',
+        statusText: '⏳ कॉल बाकी',
+        statusClass: 'bg-amber-100 text-amber-900 border-amber-300',
+        time: 'लंबित',
+        summary: `उधार बकाया ₹${due.toLocaleString('en-IN')} • तकादा कॉल शेष है`,
+        transcript: '',
+        audioUrl: null
+      };
+    });
+    const totalAllList = [...allCalls, ...pendingAsCalls];
+
+    return {
+      allCalls,
+      connectedCalls,
+      failedCalls,
+      pendingCustomers,
+      totalAllList,
+      inaugurationCalls
+    };
+  },
+
+  renderCurrentTab() {
+    const container = document.getElementById('omnidim-call-logs-container');
+    if (!container) return;
+
+    const data = this.getProcessedData();
+    const { allCalls, connectedCalls, failedCalls, pendingCustomers, totalAllList, inaugurationCalls } = data;
+
+    // Update KPI Card Displays
+    const kpiTotal = document.getElementById('kpi-total-calls');
+    const kpiConn = document.getElementById('kpi-connected-calls');
+    const kpiFail = document.getElementById('kpi-failed-calls');
+    const kpiPend = document.getElementById('kpi-pending-calls');
+    if (kpiTotal) kpiTotal.innerText = allCalls.length;
+    if (kpiConn) kpiConn.innerText = connectedCalls.length;
+    if (kpiFail) kpiFail.innerText = failedCalls.length;
+    if (kpiPend) kpiPend.innerText = pendingCustomers.length;
+
+    // Update Tab Badge Counts
+    const bAll = document.getElementById('badge-count-all');
+    const bConn = document.getElementById('badge-count-connected');
+    const bFail = document.getElementById('badge-count-failed');
+    const bPend = document.getElementById('badge-count-pending');
+    const bTotAll = document.getElementById('badge-count-total_all');
+    const bInaug = document.getElementById('badge-count-inauguration');
+    if (bAll) bAll.innerText = allCalls.length;
+    if (bConn) bConn.innerText = connectedCalls.length;
+    if (bFail) bFail.innerText = failedCalls.length;
+    if (bPend) bPend.innerText = pendingCustomers.length;
+    if (bTotAll) bTotAll.innerText = totalAllList.length;
+    if (bInaug) bInaug.innerText = inaugurationCalls.length;
+
+    // Show/Hide Batch Toolbar
+    const toolbar = document.getElementById('call-tab-toolbar');
+    const selectedCount = this.selectedInTab.size;
+    const selectedCountEl = document.getElementById('call-tab-selected-count');
+    if (selectedCountEl) selectedCountEl.innerText = selectedCount;
+
+    if (toolbar) {
+      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'inauguration') {
+        toolbar.classList.remove('hidden');
+        toolbar.classList.add('flex');
+      } else {
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+      }
+    }
+
+    // Determine Active List Based on Tab
+    let activeList = allCalls;
+    let isPendingTab = false;
+    if (this.currentCallTab === 'connected') {
+      activeList = connectedCalls;
+    } else if (this.currentCallTab === 'failed') {
+      activeList = failedCalls;
+    } else if (this.currentCallTab === 'pending') {
+      isPendingTab = true;
+    } else if (this.currentCallTab === 'total_all') {
+      activeList = totalAllList;
+    } else if (this.currentCallTab === 'inauguration') {
+      activeList = inaugurationCalls;
+    }
+
+    // Render by Selected View Mode
+    if (this.viewMode === 'split') {
+      container.innerHTML = this.renderSplitView(connectedCalls, failedCalls, pendingCustomers);
+    } else if (this.viewMode === 'cards') {
+      if (isPendingTab) {
+        container.innerHTML = this.renderPendingCards(pendingCustomers);
+      } else {
+        container.innerHTML = this.renderCardsView(activeList);
+      }
+    } else {
+      // Default: Interactive Spreadsheet + Dedicated Not Connected Column
+      if (isPendingTab) {
+        container.innerHTML = this.renderPendingSpreadsheet(pendingCustomers, failedCalls);
+      } else {
+        container.innerHTML = this.renderSpreadsheetTable(activeList, failedCalls);
+      }
+    }
+  },
+
+  // ----------------------------------------------------
+  // 1. SPREADSHEET TABLE VIEW (स्प्रेडशीट लेजर दृश्य)
+  // Left: Full Interactive Spreadsheet | Right: Dedicated Separate Column for Not Connected Numbers
+  // ----------------------------------------------------
+  renderSpreadsheetTable(calls, failedCalls = []) {
+    if (!calls || calls.length === 0) {
+      return `
+        <div class="p-10 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200 shadow-xs">
+          <span class="material-symbols-outlined text-[42px] text-slate-400">table_rows</span>
+          <p class="font-bold text-slate-800 text-sm">इस फ़िल्टर में कोई कॉल रिकॉर्ड नहीं है</p>
+          <p class="text-xs text-slate-500">ऊपर दिए गए टैब्स से अन्य श्रेणियाँ देखें या नया तकादा कॉल लगाएं</p>
+        </div>
+      `;
+    }
+
+    const allChecked = calls.length > 0 && calls.every(c => this.selectedInTab.has(c.id));
+    const allFailedChecked = failedCalls.length > 0 && failedCalls.every(c => this.selectedInTab.has(c.id));
 
     return `
-      <div class="w-full bg-surface-container-lowest rounded-xl shadow-md overflow-hidden flex flex-col">
-        <div class="flex">
-          <div class="w-1.5 ${stripeColor} flex-shrink-0"></div>
-          <div class="flex-1 p-space-md flex flex-col gap-space-sm">
-            <div class="flex items-start justify-between gap-space-xs">
-              <div class="flex flex-col min-w-0">
-                <div class="flex items-center gap-1.5">
-                  <span class="font-label-lg text-label-lg text-on-surface truncate">${c.customerName || 'अज्ञात ग्राहक'}</span>
-                  <span class="px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant font-label-sm text-label-sm">${c.role || 'ग्राहक'}</span>
-                </div>
-                <span class="font-body-sm text-body-sm text-on-surface-variant">${c.date || 'आज'} • ${wingLabel}</span>
-              </div>
-              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full ${badgeColor} font-label-sm text-label-sm flex-shrink-0">
-                <span class="material-symbols-outlined text-[14px]">${badgeIcon}</span>
-                ${c.statusLabel || (isUrgent ? 'वापस फोन करें' : 'सफल बात')}
-              </span>
-            </div>
+      <!-- MOBILE SEGMENTED SWITCHER (VISIBLE ON MOBILE/TABLET SCREENS) -->
+      <div class="flex lg:hidden items-center p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold w-full mb-3 shadow-2xs">
+        <button onclick="TelephonyUI.setMobileSection('spreadsheet')" id="btn-mobile-sec-table" class="flex-1 py-2 rounded-xl bg-white shadow-xs text-slate-900 font-bold flex items-center justify-center gap-1.5 cursor-pointer">
+          <span class="material-symbols-outlined text-[16px]">table_chart</span>
+          <span>📊 स्प्रेडशीट टेबल (${calls.length})</span>
+        </button>
+        <button onclick="TelephonyUI.setMobileSection('unconnected')" id="btn-mobile-sec-unconn" class="flex-1 py-2 rounded-xl text-rose-700 flex items-center justify-center gap-1.5 font-bold cursor-pointer">
+          <span class="material-symbols-outlined text-[16px]">phone_missed</span>
+          <span>❌ नहीं जुड़े (${failedCalls.length})</span>
+        </button>
+      </div>
 
-            <div class="bg-surface-container-low rounded-lg p-space-sm flex flex-col gap-1.5">
-              <div class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-[18px] text-on-surface-variant mt-0.5 flex-shrink-0">record_voice_over</span>
-                <div class="font-body-sm text-body-sm text-on-surface">
-                  <strong class="font-label-md text-label-md text-on-surface">ग्राहक ने पूछा:</strong>
-                  "${c.transcriptUser || 'दुकान खुली है क्या?'}"
-                </div>
-              </div>
-              <div class="flex items-start gap-2 pt-1">
-                <span class="material-symbols-outlined text-[18px] text-primary mt-0.5 flex-shrink-0">smart_toy</span>
-                <div class="font-body-sm text-body-sm text-on-surface">
-                  <strong class="font-label-md text-label-md text-primary">एआई ने बताया:</strong>
-                  "${c.transcriptAi || 'दुकान खुली है'}"
-                </div>
-              </div>
+      <!-- MAIN RESPONSIVE GRID: SPREADSHEET (8 COLS) + DEDICATED NOT CONNECTED COLUMN (4 COLS) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- SPREADSHEET TABLE SECTION -->
+        <div class="lg:col-span-8 flex flex-col gap-2.5 min-w-0" id="section-spreadsheet-table">
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-xs text-slate-800">📋 कॉल रजिस्टर विवरण</span>
+              <span class="text-[11px] text-slate-500 font-medium font-numeric-display">(${calls.length} रिकॉर्ड्स)</span>
             </div>
+            <span class="text-[11px] text-slate-400 hidden sm:inline">← दाईं ओर खिसकाकर पूरा रजिस्टर देखें →</span>
+          </div>
 
-            <div class="flex items-center justify-between px-space-sm py-2 rounded-lg bg-surface-container">
-              <div class="flex items-center gap-2">
-                <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center active:scale-90 transition-transform">
-                  <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
-                </button>
-                <div class="flex flex-col">
-                  <span class="font-label-sm text-label-sm text-on-surface">ऑडियो रिकॉर्डिंग सुनें</span>
-                  <span class="font-body-sm text-body-sm text-on-surface-variant">अवधि: ${c.audioDuration || '0:35 मिनट'}</span>
-                </div>
-              </div>
-              <div class="flex items-center gap-0.5 h-5 px-2">
-                <span class="w-1 h-2 bg-outline rounded-full"></span>
-                <span class="w-1 h-4 bg-primary rounded-full"></span>
-                <span class="w-1 h-5 bg-primary rounded-full"></span>
-                <span class="w-1 h-3 bg-primary rounded-full"></span>
-                <span class="w-1 h-4 bg-outline rounded-full"></span>
-              </div>
-            </div>
+          <div class="overflow-x-auto rounded-3xl border border-slate-200/90 bg-white shadow-xs">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="bg-slate-900 text-white font-bold tracking-wider text-[11px] uppercase border-b border-slate-800 sticky top-0 z-10">
+                  <th class="p-3.5 w-10 text-center">
+                    <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllInTab(this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer"/>
+                  </th>
+                  <th class="p-3.5 w-12 text-center whitespace-nowrap">क्र.सं.</th>
+                  <th class="p-3.5 whitespace-nowrap">स्थिति (Status)</th>
+                  <th class="p-3.5 whitespace-nowrap min-w-[150px]">नंबर एवं ग्राहक (Customer)</th>
+                  <th class="p-3.5 whitespace-nowrap">दिशा (Type)</th>
+                  <th class="p-3.5 whitespace-nowrap">अवधि</th>
+                  <th class="p-3.5 min-w-[200px]">बातचीत सारांश व ट्रांसक्रिप्ट (Summary)</th>
+                  <th class="p-3.5 whitespace-nowrap min-w-[170px]">ऑडियो रिकॉर्डिंग (Recording)</th>
+                  <th class="p-3.5 whitespace-nowrap">तारीख व समय</th>
+                  <th class="p-3.5 whitespace-nowrap text-center">त्वरित एक्शन</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${calls.map((c, idx) => {
+                  const isChecked = this.selectedInTab.has(c.id);
+                  const isOut = c.direction === 'outbound' || c.direction === 'pending_outbound';
+                  const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50';
 
-            <div class="grid grid-cols-2 gap-space-sm pt-1">
-              <a class="min-h-[48px] py-2 px-3 rounded-xl bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-1.5 shadow active:scale-98 transition-transform" href="tel:${c.phone || '+919826000000'}">
-                <span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">call</span>
-                <span>अभी फोन करें</span>
-              </a>
-              <a class="min-h-[48px] py-2 px-3 rounded-xl bg-surface-container-high text-primary font-label-md text-label-md flex items-center justify-center gap-1.5 shadow-sm active:scale-98 transition-transform" href="https://wa.me/${c.phone ? c.phone.replace(/[^\d]/g, '') : ''}?text=नमस्ते%20जी,%20रामकुमार%20भंडार%20से%20आपकी%20कॉल%20के%20संदर्भ%20में।">
-                <span class="material-symbols-outlined text-[20px]">chat</span>
-                <span>व्हाट्सऐप जवाब</span>
-              </a>
-            </div>
+                  return `
+                    <tr class="${rowBg} hover:bg-slate-100/70 transition-colors">
+                      <!-- Checkbox -->
+                      <td class="p-3 text-center">
+                        <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-emerald-600 cursor-pointer"/>
+                      </td>
+
+                      <!-- Serial Number -->
+                      <td class="p-3 text-center font-mono font-bold text-slate-500 text-[11px]">
+                        ${idx + 1}
+                      </td>
+
+                      <!-- Status Badge -->
+                      <td class="p-3 whitespace-nowrap">
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${c.statusClass}">
+                          ${c.statusText}
+                        </span>
+                      </td>
+
+                      <!-- Customer Name & Phone -->
+                      <td class="p-3 whitespace-nowrap">
+                        <div class="flex flex-col">
+                          <span class="font-bold text-slate-900 text-xs">${c.customerName}</span>
+                          <div class="flex items-center gap-1 font-mono font-bold text-slate-600 text-[11px] mt-0.5">
+                            <span>${c.phone}</span>
+                            ${c.rawPhone ? `
+                              <button onclick="navigator.clipboard.writeText('${c.rawPhone}'); AppState.showToast('नंबर कॉपी हुआ');" class="text-slate-400 hover:text-slate-700" title="कॉपी करें">
+                                <span class="material-symbols-outlined text-[13px]">content_copy</span>
+                              </button>
+                            ` : ''}
+                          </div>
+                          ${c.village ? `<span class="text-[10px] text-slate-400">${c.village}</span>` : ''}
+                        </div>
+                      </td>
+
+                      <!-- Call Direction -->
+                      <td class="p-3 whitespace-nowrap">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold ${isOut ? 'bg-indigo-50 text-indigo-900 border border-indigo-200' : 'bg-emerald-50 text-emerald-900 border border-emerald-200'}">
+                          <span class="material-symbols-outlined text-[13px]">${isOut ? 'call_made' : 'call_received'}</span>
+                          <span>${c.isPending ? '⏳ शेष कॉल' : (isOut ? 'आउटगोइंग' : 'इनकमिंग')}</span>
+                        </span>
+                      </td>
+
+                      <!-- Duration -->
+                      <td class="p-3 whitespace-nowrap">
+                        <span class="font-mono font-extrabold text-[12px] ${c.isConnected ? 'text-emerald-800' : 'text-slate-400'}">
+                          ⏱️ ${c.durationStr}
+                        </span>
+                      </td>
+
+                      <!-- Summary & Transcript Link -->
+                      <td class="p-3">
+                        <div class="flex flex-col gap-1 max-w-xs">
+                          <p class="text-[11px] text-slate-700 font-medium line-clamp-2">${c.summary || 'कॉल का विवरण उपलब्ध है'}</p>
+                          ${c.transcript ? `
+                            <button onclick="TelephonyUI.openConversationModal('${c.id}')" class="text-indigo-700 hover:text-indigo-900 font-bold text-[10px] flex items-center gap-0.5 text-left cursor-pointer">
+                              <span class="material-symbols-outlined text-[13px]">forum</span>
+                              <span>पूरी बातचीत पढ़ें (चैट ट्रांसक्रिप्ट)</span>
+                            </button>
+                          ` : ''}
+                        </div>
+                      </td>
+
+                      <!-- Audio Recording Player -->
+                      <td class="p-3 whitespace-nowrap">
+                        ${c.audioUrl ? `
+                          <div class="flex items-center gap-1.5">
+                            <audio controls preload="none" class="h-8 max-w-[175px] rounded-lg border border-slate-200 bg-slate-50" src="${c.audioUrl}"></audio>
+                          </div>
+                        ` : (c.isConnected ? `
+                          <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-7 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-[11px] flex items-center gap-1 border border-emerald-200 active:scale-95 cursor-pointer">
+                            <span class="material-symbols-outlined text-[14px] text-emerald-700">play_arrow</span>
+                            <span>ऑडियो सुनें</span>
+                          </button>
+                        ` : `
+                          <span class="text-slate-400 text-[10px]">ऑडियो नहीं (00:00)</span>
+                        `)}
+                      </td>
+
+                      <!-- Date & Time -->
+                      <td class="p-3 whitespace-nowrap text-slate-500 font-medium text-[11px]">
+                        ${c.time}
+                      </td>
+
+                      <!-- Action Buttons -->
+                      <td class="p-3 whitespace-nowrap text-center">
+                        <div class="flex items-center justify-center gap-1.5">
+                          <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-8 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer" title="AI से दोबारा कॉल लगाएं">
+                            <span class="material-symbols-outlined text-[15px]">call</span>
+                            <span>कॉल करें</span>
+                          </button>
+                          ${c.rawPhone ? `
+                            <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20के%20संदर्भ%20में।" target="_blank" class="h-8 w-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center justify-center border border-emerald-200 active:scale-95" title="व्हाट्सऐप भेजें">
+                              <span class="material-symbols-outlined text-[16px] text-emerald-700">chat</span>
+                            </a>
+                          ` : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
           </div>
         </div>
+
+        <!-- DEDICATED SEPARATE COLUMN: NOT CONNECTED (अनुत्तरित / व्यस्त / फेल्ड) REDIAL QUEUE -->
+        <div class="lg:col-span-4 flex flex-col gap-3 bg-rose-50/70 p-4 rounded-3xl border-2 border-rose-300 shadow-sm" id="section-unconnected-column">
+          <div class="flex items-start justify-between pb-2.5 border-b border-rose-200 gap-2">
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="material-symbols-outlined text-rose-700 text-[22px]">phone_missed</span>
+                <h4 class="font-bold text-sm text-rose-950">❌ कनेक्ट नहीं हुए नंबर</h4>
+              </div>
+              <p class="text-[11px] text-rose-800 font-medium mt-0.5">अनुत्तरित, व्यस्त व नेटवर्क विफलता सूची</p>
+            </div>
+            <span class="px-2.5 py-1 rounded-full bg-rose-200 text-rose-900 text-xs font-bold font-numeric-display shrink-0">
+              ${failedCalls.length} नंबर
+            </span>
+          </div>
+
+          <!-- Quick Action Bar inside Dedicated Column -->
+          <div class="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-rose-200 shadow-xs">
+            <label class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
+              <input type="checkbox" ${allFailedChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllFailed(this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer"/>
+              <span>सबको चुनें</span>
+            </label>
+            <button onclick="TelephonyUI.redialAllFailed()" class="h-8 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+              <span class="material-symbols-outlined text-[15px]">call</span>
+              <span>सबको दोबारा कॉल लगाएं</span>
+            </button>
+          </div>
+
+          <!-- Failed Calls List -->
+          <div class="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
+            ${failedCalls.length === 0 ? `
+              <div class="p-6 bg-white rounded-2xl text-center border border-rose-200 text-xs text-slate-500">
+                🎉 बधाई! कोई भी नंबर बिना कनेक्ट हुआ नहीं बचा है। सभी नंबरों पर बातचीत हो चुकी है।
+              </div>
+            ` : failedCalls.map(c => `
+              <div class="p-3 bg-white rounded-2xl border border-rose-200 shadow-xs flex flex-col gap-2 hover:border-rose-300 transition-colors">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer shrink-0"/>
+                    <div class="min-w-0">
+                      <span class="font-bold text-slate-900 text-xs truncate block">${c.customerName}</span>
+                      <span class="font-mono font-bold text-rose-800 text-xs">${c.phone}</span>
+                    </div>
+                  </div>
+                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 shrink-0">
+                    ${c.failReason || 'नहीं उठा (00:00)'}
+                  </span>
+                </div>
+
+                <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
+                  <span class="text-[10px] text-slate-400 font-medium">${c.time}</span>
+                  <div class="flex items-center gap-1.5">
+                    <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-7 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                      <span class="material-symbols-outlined text-[13px]">call</span>
+                      <span>कॉल करें</span>
+                    </button>
+                    ${c.rawPhone ? `
+                      <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20नहीं%20लग%20सकी।" target="_blank" class="h-7 w-7 rounded-xl bg-emerald-50 text-emerald-900 flex items-center justify-center border border-emerald-200" title="व्हाट्सऐप भेजें">
+                        <span class="material-symbols-outlined text-[14px] text-emerald-700">chat</span>
+                      </a>
+                    ` : ''}
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
       </div>
     `;
   },
 
+  // ----------------------------------------------------
+  // 2. DEDICATED TWO-COLUMN SPLIT VIEW (दोहरा कॉलम दृश्य)
+  // Left: Connected & All Calls | Right: Dedicated Failed/Unconnected Redial Column
+  // ----------------------------------------------------
+  renderSplitView(connectedCalls, failedCalls, pendingCustomers) {
+    return `
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- LEFT COLUMN (7 COLS): CONNECTED & RECENT ANSWERED CALLS -->
+        <div class="lg:col-span-7 flex flex-col gap-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-emerald-700 text-[20px]">check_circle</span>
+              <h4 class="font-bold text-sm text-slate-900">सफल कॉल्स (बातचीत, सारांश व ऑडियो रिकॉर्डिंग)</h4>
+            </div>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-xs font-bold">
+              ${connectedCalls.length} कनेक्टेड
+            </span>
+          </div>
+
+          <div class="flex flex-col gap-2.5 max-h-[75vh] overflow-y-auto pr-1">
+            ${connectedCalls.length === 0 ? `
+              <div class="p-8 bg-white rounded-2xl text-center border border-slate-200 text-xs text-slate-500">
+                अभी कोई कनेक्टेड बातचीत रिकॉर्ड नहीं है
+              </div>
+            ` : connectedCalls.map(c => `
+              <div class="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2">
+                <div class="flex items-start justify-between gap-2">
+                  <div>
+                    <div class="flex items-center gap-1.5">
+                      <span class="font-bold text-slate-900 text-sm">${c.customerName}</span>
+                      <span class="font-mono text-xs text-slate-600">(${c.phone})</span>
+                    </div>
+                    <span class="text-[11px] text-slate-500 font-medium">${c.time} • ⏱️ ${c.durationStr}</span>
+                  </div>
+                  <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[10px]">
+                    ✅ बात हुई
+                  </span>
+                </div>
+
+                <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-xs text-slate-700">
+                  <strong class="text-slate-900 block mb-0.5">📝 सारांश:</strong>
+                  ${c.summary}
+                </div>
+
+                <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
+                  <div class="flex items-center gap-2">
+                    ${c.audioUrl ? `
+                      <audio controls preload="none" class="h-7 max-w-[180px] rounded" src="${c.audioUrl}"></audio>
+                    ` : `
+                      <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-7 px-2 rounded-lg bg-emerald-50 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200">
+                        <span class="material-symbols-outlined text-[14px]">play_arrow</span>
+                        <span>ऑडियो</span>
+                      </button>
+                    `}
+                    ${c.transcript ? `
+                      <button onclick="TelephonyUI.openConversationModal('${c.id}')" class="text-xs text-indigo-700 font-bold hover:underline">
+                        ट्रांसक्रिप्ट देखें
+                      </button>
+                    ` : ''}
+                  </div>
+                  <a href="https://wa.me/${c.phone.replace(/\D/g, '')}" target="_blank" class="h-7 px-2 rounded-lg bg-emerald-50 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200">
+                    <span class="material-symbols-outlined text-[14px]">chat</span>
+                    <span>व्हाट्सऐप</span>
+                  </a>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- RIGHT DEDICATED COLUMN (5 COLS): NOT CONNECTED (अनुत्तरित / व्यस्त) REDIAL QUEUE -->
+        <div class="lg:col-span-5 flex flex-col gap-3 bg-rose-50/60 p-4 rounded-3xl border-2 border-rose-300 shadow-sm">
+          <div class="flex items-center justify-between pb-2 border-b border-rose-200">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-rose-700 text-[22px]">phone_missed</span>
+              <div>
+                <h4 class="font-bold text-sm text-rose-950">❌ कनेक्ट नहीं हुआ / अनुत्तरित नंबर</h4>
+                <p class="text-[11px] text-rose-700">यहाँ से चुनें और तुरंत दोबारा कॉल लगाएं</p>
+              </div>
+            </div>
+            <span class="px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 text-xs font-bold font-numeric-display">
+              ${failedCalls.length} नंबर
+            </span>
+          </div>
+
+          <!-- Quick Action Bar for Failed Numbers -->
+          <div class="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-rose-200 shadow-xs">
+            <label class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
+              <input type="checkbox" onchange="TelephonyUI.toggleSelectAllInTab(this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer"/>
+              <span>सबको चुनें</span>
+            </label>
+            <button onclick="TelephonyUI.redialAllFailed()" class="h-8 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+              <span class="material-symbols-outlined text-[15px]">call</span>
+              <span>सबको दोबारा कॉल लगाएं</span>
+            </button>
+          </div>
+
+          <div class="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
+            ${failedCalls.length === 0 ? `
+              <div class="p-8 bg-white rounded-2xl text-center border border-rose-200 text-xs text-slate-500">
+                🎉 कोई अनुत्तरित नंबर नहीं है! सभी नंबरों पर बातचीत हो चुकी है।
+              </div>
+            ` : failedCalls.map(c => `
+              <div class="p-3 bg-white rounded-2xl border border-rose-200 shadow-xs flex flex-col gap-2">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer shrink-0"/>
+                    <div class="min-w-0">
+                      <span class="font-bold text-slate-900 text-xs truncate block">${c.customerName}</span>
+                      <span class="font-mono font-bold text-rose-800 text-xs">${c.phone}</span>
+                    </div>
+                  </div>
+                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 shrink-0">
+                    नहीं उठा (00:00)
+                  </span>
+                </div>
+
+                <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
+                  <span class="text-[10px] text-slate-400 font-medium">${c.time}</span>
+                  <div class="flex items-center gap-1.5">
+                    <button onclick="TelephonyUI.redialCustomer('${c.phone}', '${c.customerName}')" class="h-7 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                      <span class="material-symbols-outlined text-[13px]">call</span>
+                      <span>पुनः कॉल करें</span>
+                    </button>
+                    <a href="https://wa.me/${c.phone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20नहीं%20लग%20सकी।" target="_blank" class="h-7 w-7 rounded-xl bg-emerald-50 text-emerald-900 flex items-center justify-center border border-emerald-200">
+                      <span class="material-symbols-outlined text-[14px] text-emerald-700">chat</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+      </div>
+    `;
+  },
+
+  // ----------------------------------------------------
+  // 3. PENDING SPREADSHEET (बकायादार ग्राहक स्प्रेडशीट)
+  // ----------------------------------------------------
+  renderPendingSpreadsheet(customers) {
+    if (!customers || customers.length === 0) {
+      return `
+        <div class="p-10 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200 shadow-xs">
+          <span class="material-symbols-outlined text-[42px] text-emerald-600">verified</span>
+          <p class="font-bold text-slate-800 text-sm">सभी उधारी ग्राहकों को कॉल लग चुकी है!</p>
+          <p class="text-xs text-slate-500">कोई भी शेष बकायादार ग्राहक नहीं बचा है</p>
+        </div>
+      `;
+    }
+
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    const allChecked = customers.length > 0 && customers.every(c => this.selectedInTab.has(c.id));
+
+    return `
+      <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xs">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="bg-amber-900 text-white font-bold tracking-wider text-[11px] uppercase border-b border-amber-800">
+              <th class="p-3.5 w-10 text-center">
+                <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllInTab(this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer"/>
+              </th>
+              <th class="p-3.5 whitespace-nowrap">स्थिति</th>
+              <th class="p-3.5 whitespace-nowrap">ग्राहक का नाम एवं पता</th>
+              <th class="p-3.5 whitespace-nowrap">मोबाइल नंबर</th>
+              <th class="p-3.5 whitespace-nowrap">बकाया राशि (उधार)</th>
+              <th class="p-3.5 whitespace-nowrap text-center">त्वरित AI कॉल एक्शन</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            ${customers.map((c, idx) => {
+              const isChecked = this.selectedInTab.has(c.id);
+              const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+              const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-amber-50/20';
+
+              return `
+                <tr class="${rowBg} hover:bg-amber-50/50 transition-colors">
+                  <td class="p-3 text-center">
+                    <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-emerald-600 cursor-pointer"/>
+                  </td>
+                  <td class="p-3 whitespace-nowrap">
+                    <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px]">
+                      ⏳ कॉल बाकी
+                    </span>
+                  </td>
+                  <td class="p-3 whitespace-nowrap">
+                    <div class="flex flex-col">
+                      <span class="font-bold text-slate-900 text-xs">${c.name}</span>
+                      <span class="text-[11px] text-slate-500">${c.village || 'पता नहीं'} • ${c.role || 'किसान'}</span>
+                    </div>
+                  </td>
+                  <td class="p-3 whitespace-nowrap font-mono font-bold text-slate-700">
+                    ${c.phone || 'नंबर नहीं'}
+                  </td>
+                  <td class="p-3 whitespace-nowrap font-numeric-display font-extrabold text-rose-700 text-sm">
+                    ₹${due.toLocaleString('en-IN')}
+                  </td>
+                  <td class="p-3 whitespace-nowrap text-center">
+                    <div class="flex items-center justify-center gap-1.5">
+                      <button onclick="TelephonyUI.startBatchAutoDial([{ id: '${c.id}', name: '${c.name}', phone: '${c.phone}', due: ${due}, shopId: '${shopId}' }])" class="h-8 px-3 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                        <span class="material-symbols-outlined text-[15px]">smart_toy</span>
+                        <span>AI कॉल लगाएं</span>
+                      </button>
+                      <a href="https://wa.me/${(c.phone || '').replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.name)}%20जी,%20रामकुमार%20भंडार%20से%20सूचना%20है।%20आपके%20खाते%20में%20₹${due}%20का%20बकाया%20है।" target="_blank" class="h-8 w-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center justify-center border border-emerald-200">
+                        <span class="material-symbols-outlined text-[15px] text-emerald-700">chat</span>
+                      </a>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  // ----------------------------------------------------
+  // 4. CARDS VIEW (मोबाइल टच कार्ड्स — कॉम्पैक्ट व स्वच्छ)
+  // ----------------------------------------------------
+  renderCardsView(calls) {
+    if (!calls || calls.length === 0) {
+      return `
+        <div class="p-8 bg-white rounded-3xl text-center border border-slate-200 text-xs text-slate-500">
+          कोई कॉल रिकॉर्ड नहीं है
+        </div>
+      `;
+    }
+    return `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        ${calls.map(c => `
+          <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-2.5 transition-all">
+            <!-- Header: Checkbox, Name, Phone, Status & Duration -->
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-emerald-600 cursor-pointer shrink-0"/>
+                <div class="min-w-0">
+                  <h4 class="font-bold text-slate-900 text-sm truncate">${c.customerName}</h4>
+                  <div class="flex items-center gap-1.5 text-xs text-slate-500">
+                    <span class="font-mono font-bold text-slate-700">${c.phone}</span>
+                    <span>•</span>
+                    <span class="text-[11px]">${c.time}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex flex-col items-end gap-1 shrink-0">
+                <span class="px-2.5 py-0.5 rounded-full border text-[11px] font-bold ${c.statusClass}">
+                  ${c.statusText}
+                </span>
+                <span class="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                  ⏱️ ${c.durationStr}
+                </span>
+              </div>
+            </div>
+
+            <!-- Controls Row: Inline Audio (No Redirect) + View Details + Call & WhatsApp -->
+            <div class="flex items-center justify-between pt-2 border-t border-slate-100 gap-2 flex-wrap">
+              <div class="flex items-center gap-1.5">
+                ${c.audioUrl ? `
+                  <audio controls preload="none" class="h-8 max-w-[155px] sm:max-w-[175px] rounded-lg border border-slate-200 bg-slate-50" src="${c.audioUrl}"></audio>
+                ` : (c.isConnected ? `
+                  <button type="button" onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-8 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200 cursor-pointer transition-all">
+                    <span class="material-symbols-outlined text-[15px] text-emerald-700">play_arrow</span>
+                    <span>ऑडियो</span>
+                  </button>
+                ` : `
+                  <span class="text-slate-400 text-[11px] font-medium">ऑडियो नहीं</span>
+                `)}
+
+                <!-- Toggle Details Button (Click to reveal summary & full transcript) -->
+                <button type="button" onclick="TelephonyUI.toggleCardDetails('${c.id}')" id="btn-toggle-card-${c.id}" class="h-8 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 cursor-pointer transition-all" title="बातचीत का पूरा विवरण देखें">
+                  <span class="material-symbols-outlined text-[15px]">expand_more</span>
+                  <span>विवरण</span>
+                </button>
+              </div>
+
+              <div class="flex items-center gap-1.5 ml-auto">
+                <button type="button" onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-8 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer">
+                  <span class="material-symbols-outlined text-[15px]">call</span>
+                  <span>कॉल</span>
+                </button>
+                ${c.rawPhone ? `
+                  <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20के%20संदर्भ%20में।" target="_blank" class="h-8 w-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center justify-center border border-emerald-200 active:scale-95 transition-all" title="व्हाट्सऐप भेजें">
+                    <span class="material-symbols-outlined text-[15px] text-emerald-700">chat</span>
+                  </a>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- Expandable Details: Summary & Full Transcript (Hidden by default, shown on click) -->
+            <div id="card-details-${c.id}" class="hidden pt-2.5 border-t border-slate-100 flex flex-col gap-2 transition-all">
+              ${c.summary ? `
+                <div class="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800">
+                  <strong class="text-slate-900 block mb-0.5">📝 बातचीत सारांश:</strong>
+                  <span>${c.summary}</span>
+                </div>
+              ` : ''}
+
+              ${c.transcript ? `
+                <div class="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-xs text-slate-700 max-h-48 overflow-y-auto">
+                  <div class="flex items-center justify-between mb-1">
+                    <strong class="text-slate-900">💬 पूरी बातचीत ट्रांसक्रिप्ट:</strong>
+                    <button type="button" onclick="TelephonyUI.openConversationModal('${c.id}')" class="text-indigo-700 hover:underline font-bold text-[11px]">
+                      फुल स्क्रीन देखें ↗
+                    </button>
+                  </div>
+                  <div class="space-y-1 font-mono text-[11px] text-slate-800 leading-relaxed">${c.transcript}</div>
+                </div>
+              ` : ''}
+
+              ${c.failReason ? `
+                <div class="bg-rose-50 p-2 rounded-xl border border-rose-200 text-xs text-rose-800">
+                  <strong>कारण:</strong> ${c.failReason}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  },
+
+  renderPendingCards(customers) {
+    const shopId = this.currentWingFilter === 'all' ? AppState.currentShopId : this.currentWingFilter;
+    return `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        ${customers.map(c => {
+          const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+          return `
+            <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-2.5">
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2.5">
+                  <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-emerald-600 cursor-pointer"/>
+                  <div>
+                    <h4 class="font-bold text-slate-900 text-sm">${c.name}</h4>
+                    <span class="text-xs text-slate-500">${c.phone} • ${c.village || 'गांव'}</span>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <span class="text-[10px] font-bold text-rose-700 uppercase block">बाकी</span>
+                  <span class="font-numeric-display font-extrabold text-sm text-rose-700">₹${due.toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+                <button onclick="TelephonyUI.startBatchAutoDial([{ id: '${c.id}', name: '${c.name}', phone: '${c.phone}', due: ${due}, shopId: '${shopId}' }])" class="flex-1 h-9 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs active:scale-95">
+                  <span class="material-symbols-outlined text-[16px]">smart_toy</span>
+                  <span>AI कॉल लगाएं</span>
+                </button>
+                <a href="https://wa.me/${(c.phone || '').replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.name)}%20जी,%20रामकुमार%20भंडार%20से%20सूचना%20है।%20आपके%20खाते%20में%20₹${due}%20का%20बकाया%20है।" target="_blank" class="h-9 px-3 rounded-xl bg-emerald-50 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200">
+                  <span class="material-symbols-outlined text-[16px] text-emerald-700">chat</span>
+                  <span>व्हाट्सऐप</span>
+                </a>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  },
+
+  // ----------------------------------------------------
+  // CONVERSATION TRANSCRIPT MODAL VIEWER
+  // ----------------------------------------------------
+  openConversationModal(callId) {
+    const data = this.getProcessedData();
+    const call = data.allCalls.find(c => c.id === callId);
+    if (!call) return;
+
+    this.activeTranscriptCall = call;
+
+    const modal = document.getElementById('modal-call-conversation');
+    const titleEl = document.getElementById('transcript-modal-title');
+    const subtitleEl = document.getElementById('transcript-modal-subtitle');
+    const audioContainer = document.getElementById('transcript-modal-audio-container');
+    const bodyEl = document.getElementById('transcript-modal-body');
+
+    if (titleEl) titleEl.innerText = `${call.customerName} (${call.phone}) से बातचीत`;
+    if (subtitleEl) subtitleEl.innerText = `${call.time} • अवधि: ${call.durationStr} • स्थिति: ${call.statusText}`;
+
+    if (audioContainer) {
+      if (call.audioUrl) {
+        audioContainer.classList.remove('hidden');
+        audioContainer.innerHTML = `
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-emerald-800 text-[20px]">volume_up</span>
+            <span class="text-xs font-bold text-slate-800">वास्तविक कॉल रिकॉर्डिंग:</span>
+          </div>
+          <audio controls autoplay class="h-8 max-w-[240px] rounded" src="${call.audioUrl}"></audio>
+        `;
+      } else {
+        audioContainer.classList.add('hidden');
+      }
+    }
+
+    if (bodyEl) {
+      // Parse HTML or LLM: / User: transcript
+      const raw = call.transcript || '';
+      if (!raw) {
+        bodyEl.innerHTML = `<div class="p-4 text-center text-xs text-slate-500">कोई ट्रांसक्रिप्ट उपलब्ध नहीं है</div>`;
+      } else {
+        const turns = raw.split(/<br\s*\/?>|\n/).filter(t => t.trim());
+        bodyEl.innerHTML = turns.map(t => {
+          const isAi = t.toLowerCase().startsWith('llm:') || t.toLowerCase().startsWith('ai:');
+          const isUser = t.toLowerCase().startsWith('user:') || t.toLowerCase().startsWith('caller:');
+          const cleanText = t.replace(/^(llm:|user:|ai:|caller:)/i, '').trim();
+
+          if (isAi) {
+            return `
+              <div class="flex items-start gap-2 max-w-[85%] self-start">
+                <div class="w-7 h-7 rounded-full bg-emerald-800 text-emerald-100 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  AI
+                </div>
+                <div class="p-3 bg-emerald-50 border border-emerald-200/90 text-emerald-950 rounded-2xl rounded-tl-none text-xs leading-relaxed font-medium">
+                  ${cleanText}
+                </div>
+              </div>
+            `;
+          } else if (isUser) {
+            return `
+              <div class="flex items-start gap-2 max-w-[85%] self-end flex-row-reverse">
+                <div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  ग
+                </div>
+                <div class="p-3 bg-slate-100 border border-slate-200 text-slate-900 rounded-2xl rounded-tr-none text-xs leading-relaxed font-medium">
+                  ${cleanText}
+                </div>
+              </div>
+            `;
+          } else {
+            return `
+              <div class="p-2.5 bg-slate-50 rounded-xl text-xs text-slate-700 text-center font-medium">
+                ${t}
+              </div>
+            `;
+          }
+        }).join('');
+      }
+    }
+
+    if (modal) {
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+  },
+
+  closeConversationModal() {
+    const modal = document.getElementById('modal-call-conversation');
+    if (modal) {
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+  },
+
+  copyTranscriptText() {
+    if (!this.activeTranscriptCall) return;
+    const clean = (this.activeTranscriptCall.transcript || '').replace(/<br\s*\/?>/gi, '\n');
+    navigator.clipboard.writeText(clean);
+    AppState.showToast('✓ पूरी बातचीत ट्रांसक्रिप्ट कॉपी हो गई');
+  },
+
+  // ----------------------------------------------------
+  // MULTI-SELECTION & BATCH ACTIONS
+  // ----------------------------------------------------
+  toggleSelectAllInTab(isChecked) {
+    const data = this.getProcessedData();
+    let targetList = data.allCalls;
+    if (this.currentCallTab === 'connected') targetList = data.connectedCalls;
+    else if (this.currentCallTab === 'failed') targetList = data.failedCalls;
+    else if (this.currentCallTab === 'pending') targetList = data.pendingCustomers;
+    else if (this.currentCallTab === 'total_all') targetList = data.totalAllList;
+
+    if (isChecked) {
+      targetList.forEach(c => this.selectedInTab.add(c.id));
+    } else {
+      this.selectedInTab.clear();
+    }
+    this.renderCurrentTab();
+  },
+
+  toggleSelectAllFailed(isChecked) {
+    const data = this.getProcessedData();
+    if (isChecked) {
+      data.failedCalls.forEach(c => this.selectedInTab.add(c.id));
+    } else {
+      data.failedCalls.forEach(c => this.selectedInTab.delete(c.id));
+    }
+    const countEl = document.getElementById('call-tab-selected-count');
+    if (countEl) countEl.innerText = this.selectedInTab.size;
+    const toolbar = document.getElementById('call-tab-toolbar');
+    if (toolbar) {
+      if (this.selectedInTab.size > 0) {
+        toolbar.classList.remove('hidden');
+        toolbar.classList.add('flex');
+      } else {
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+      }
+    }
+    this.renderCurrentTab();
+  },
+
+  exportToCsv() {
+    const data = this.getProcessedData();
+    let list = data.allCalls;
+    if (this.currentCallTab === 'connected') list = data.connectedCalls;
+    else if (this.currentCallTab === 'failed') list = data.failedCalls;
+    else if (this.currentCallTab === 'pending') list = data.pendingCustomers;
+    else if (this.currentCallTab === 'total_all') list = data.totalAllList;
+
+    if (!list || list.length === 0) {
+      alert('डाउनलोड करने के लिए कोई रिकॉर्ड उपलब्ध नहीं है');
+      return;
+    }
+
+    const headers = ['क्र.सं.', 'स्थिति', 'ग्राहक का नाम', 'मोबाइल नंबर', 'गांव/पता', 'दिशा', 'कॉल अवधि', 'तारीख व समय', 'बातचीत सारांश'];
+    const rows = list.map((c, idx) => [
+      idx + 1,
+      `"${c.statusText || (c.isConnected ? 'सफल बात' : 'कॉल नहीं लगी')}"`,
+      `"${(c.customerName || '').replace(/"/g, '""')}"`,
+      `"${c.phone || ''}"`,
+      `"${(c.village || '').replace(/"/g, '""')}"`,
+      `"${c.direction === 'outbound' ? 'आउटगोइंग' : (c.direction === 'inbound' ? 'इनकमिंग' : 'लंबित')}"`,
+      `"${c.durationStr || '00:00'}"`,
+      `"${c.time || ''}"`,
+      `"${(c.summary || '').replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Ramkumar_Bhandar_Call_Register_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    AppState.showToast('✓ स्प्रेडशीट CSV सफलतापूर्वक डाउनलोड हुई');
+  },
+
+  shareReportWhatsApp() {
+    const data = this.getProcessedData();
+    const dateStr = new Date().toLocaleDateString('hi-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const text = `📋 *रामकुमार भंडार — AI टेलीफोन कॉलिंग रिपोर्ट*
+📅 तारीख: ${dateStr}
+━━━━━━━━━━━━━━━━━━
+📞 कुल डायल किए नंबर: ${data.allCalls.length}
+✅ बात हुई (सफल): ${data.connectedCalls.length}
+❌ कनेक्ट नहीं हुआ (अनुत्तरित/व्यस्त): ${data.failedCalls.length}
+⏳ शेष उधार तकादा बाकी: ${data.pendingCustomers.length}
+━━━━━━━━━━━━━━━━━━
+💡 *अंतिम 3 कनेक्टेड कॉल्स:*
+${data.connectedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}): ${c.durationStr} - ${c.summary.substring(0, 40)}...`).join('\n') || 'कोई नहीं'}
+
+🔍 *तत्काल री-डायल योग्य नंबर:*
+${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${c.failReason || 'नहीं उठा'}`).join('\n') || 'सभी नंबर कनेक्ट हो चुके हैं'}
+
+(रामकुमार भंडार ऐप से लाइव स्वचालित रिपोर्ट)`;
+
+    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  },
+
+  toggleCustomerInTab(id, isChecked) {
+    if (isChecked) {
+      this.selectedInTab.add(id);
+    } else {
+      this.selectedInTab.delete(id);
+    }
+    const countEl = document.getElementById('call-tab-selected-count');
+    if (countEl) countEl.innerText = this.selectedInTab.size;
+
+    const toolbar = document.getElementById('call-tab-toolbar');
+    if (toolbar && this.selectedInTab.size > 0) {
+      toolbar.classList.remove('hidden');
+      toolbar.classList.add('flex');
+    }
+  },
+
+  clearSelectionInTab() {
+    this.selectedInTab.clear();
+    this.renderCurrentTab();
+  },
+
+  startBatchDialFromTab() {
+    const data = this.getProcessedData();
+    let toCall = [];
+
+    if (this.selectedInTab.size > 0) {
+      // Find items in either calls or pending customers or total list
+      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList];
+      // Deduplicate by ID
+      const seenIds = new Set();
+      const uniqueSources = allSources.filter(item => {
+        if (seenIds.has(item.id)) return false;
+        seenIds.add(item.id);
+        return true;
+      });
+
+      toCall = uniqueSources.filter(c => this.selectedInTab.has(c.id)).map(c => ({
+        id: c.id,
+        name: c.customerName || c.name || 'ग्राहक',
+        phone: c.rawPhone || c.phone,
+        due: c.dueAmount || c.due || 0,
+        shopId: c.shopId || AppState.currentShopId
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    } else if (this.currentCallTab === 'failed') {
+      toCall = data.failedCalls.map(c => ({
+        id: c.id,
+        name: c.customerName,
+        phone: c.rawPhone || c.phone,
+        due: c.dueAmount || 0,
+        shopId: c.shopId
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    } else if (this.currentCallTab === 'pending') {
+      toCall = data.pendingCustomers.map(c => {
+        const due = (c.balancesRupees ? c.balancesRupees[AppState.currentShopId] : (c.balances?.[AppState.currentShopId] ? c.balances[AppState.currentShopId] / 100 : 0)) || 0;
+        return {
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+          due,
+          shopId: AppState.currentShopId
+        };
+      }).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    } else if (this.currentCallTab === 'inauguration') {
+      toCall = (data.inaugurationCalls || []).map(c => ({
+        id: c.id,
+        name: c.customerName,
+        phone: c.rawPhone || c.phone,
+        cleanPhone: c.rawPhone,
+        due: 0,
+        shopId: 'kirana',
+        campaign: 'inauguration'
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    }
+
+    if (toCall.length === 0) {
+      alert('कॉल करने के लिए कोई वैध नंबर नहीं चुना गया');
+      return;
+    }
+
+    if (this.currentCallTab === 'inauguration') {
+      if (confirm(`क्या आप उद्घाटन आमंत्रण हेतु चुने हुए ${toCall.length} नंबरों पर एक-एक करके बैकग्राउंड AI कॉलिंग शुरू करना चाहते हैं?`)) {
+        this.selectedInTab.clear();
+        this.startSequentialCampaignDial(toCall);
+      }
+      return;
+    }
+
+    if (confirm(`क्या आप चुने हुए ${toCall.length} नंबरों पर बैकग्राउंड AI ऑटो-कॉलिंग शुरू करना चाहते हैं?`)) {
+      this.selectedInTab.clear();
+      this.startBatchAutoDial(toCall);
+    }
+  },
+
+  redialAllFailed() {
+    const data = this.getProcessedData();
+    const toDial = data.failedCalls.map(c => ({
+      id: c.id,
+      name: c.customerName,
+      phone: c.phone,
+      due: 0,
+      shopId: c.shopId
+    })).filter(c => c.phone);
+
+    if (toDial.length === 0) {
+      alert('कोई अनुत्तरित नंबर नहीं मिला');
+      return;
+    }
+
+    if (confirm(`क्या आप इन सभी ${toDial.length} अनुत्तरित नंबरों पर दोबारा AI कॉल लगाना चाहते हैं?`)) {
+      this.startBatchAutoDial(toDial);
+    }
+  },
+
+  redialCustomer(phone, name, amount = 0, shopId = null) {
+    if (confirm(`क्या आप ${name || 'ग्राहक'} (${phone}) को दोबारा AI तकादा कॉल लगाना चाहते हैं?`)) {
+      this.startBatchAutoDial([{
+        id: 'redial_' + Date.now(),
+        name: name || 'ग्राहक',
+        phone,
+        due: amount || 0,
+        shopId: shopId || AppState.currentShopId
+      }]);
+    }
+  },
+
+  // ----------------------------------------------------
+  // BACKGROUND AUTO-DIALER QUEUE
+  // ----------------------------------------------------
+  startBatchAutoDial(customerList, shopId = null) {
+    if (!Array.isArray(customerList) || customerList.length === 0) {
+      alert('कॉल करने के लिए कोई ग्राहक नहीं चुना गया');
+      return;
+    }
+
+    const validList = customerList.filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    if (validList.length === 0) {
+      alert('चुने हुए ग्राहकों में कोई वैध 10-अंकों का मोबाइल नंबर नहीं मिला');
+      return;
+    }
+
+    this.autoDialQueue = validList;
+    this.autoDialCurrentIndex = 0;
+    this.isAutoDialing = true;
+    this.isAutoDialPaused = false;
+
+    // Show persistent banner
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
+    }
+
+    AppState.showToast(`🚀 बैकग्राउंड AI ऑटो-कॉलिंग शुरू: कुल ${validList.length} ग्राहक`);
+    this.processNextAutoDial();
+  },
+
+  async processNextAutoDial() {
+    if (!this.isAutoDialing) return;
+    if (this.isAutoDialPaused) return;
+
+    if (this.autoDialCurrentIndex >= this.autoDialQueue.length) {
+      this.stopAutoDial();
+      AppState.showToast('🎉 सभी ग्राहकों को AI कॉल सफलतापूर्वक लगा दी गई है!');
+      setTimeout(() => this.fetchLiveOmnidimLogs(), 2000);
+      return;
+    }
+
+    const currentCustomer = this.autoDialQueue[this.autoDialCurrentIndex];
+    const total = this.autoDialQueue.length;
+    const currentNum = this.autoDialCurrentIndex + 1;
+
+    // Update Banner UI
+    const progressEl = document.getElementById('calling-banner-progress');
+    const targetEl = document.getElementById('calling-banner-current-target');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (progressEl) progressEl.innerText = `📞 AI ऑटो-कॉलिंग जारी है: (${currentNum}/${total})`;
+    if (targetEl) targetEl.innerText = `वर्तमान: ${currentCustomer.name} (${currentCustomer.phone}) • ₹${currentCustomer.due || 0} बाकी`;
+    if (statusEl) {
+      statusEl.innerText = 'कॉल लगाई जा रही है...';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700 animate-pulse';
+    }
+
+    try {
+      await fetch('/api/omnidim/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          toNumber: currentCustomer.phone,
+          prompt: `नमस्ते ${currentCustomer.name} जी, रामकुमार भंडार से तकादा कॉल है।`,
+          context: {
+            customerName: currentCustomer.name,
+            amount: currentCustomer.due || 0,
+            shopId: currentCustomer.shopId || AppState.currentShopId
+          }
+        })
+      });
+
+      if (statusEl) {
+        statusEl.innerText = '✓ निर्देश भेजा गया • अगली कॉल 12s में';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700';
+      }
+    } catch (err) {
+      console.warn('Auto-dial call dispatch failed:', err);
+    }
+
+    this.autoDialCurrentIndex++;
+
+    if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+    this.autoDialTimer = setTimeout(() => {
+      this.processNextAutoDial();
+    }, 12000);
+  },
+
+  pauseOrResumeAutoDial() {
+    this.isAutoDialPaused = !this.isAutoDialPaused;
+    const btn = document.getElementById('calling-banner-pause-btn');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (this.isAutoDialPaused) {
+      if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+      if (btn) btn.innerText = '▶️ पुनः शुरू';
+      if (statusEl) {
+        statusEl.innerText = '⏸️ रुकी हुई है';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-600';
+      }
+      AppState.showToast('AI कॉलिंग रोक दी गई है');
+    } else {
+      if (btn) btn.innerText = '⏸️ रोकें';
+      AppState.showToast('AI कॉलिंग पुनः शुरू');
+      if (this.isCampaignCalling) {
+        this.processNextSequentialCall();
+      } else {
+        this.processNextAutoDial();
+      }
+    }
+  },
+
+  stopAutoDial() {
+    this.isAutoDialing = false;
+    this.isCampaignCalling = false;
+    this.isAutoDialPaused = false;
+    this.autoDialQueue = [];
+    this.campaignQueue = [];
+    if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
+    }
+  },
+
+  // ----------------------------------------------------
+  // CARD DETAILS TOGGLE (विवरण दिखाएं / छिपाएं)
+  // ----------------------------------------------------
+  toggleCardDetails(id) {
+    const drawer = document.getElementById(`card-details-${id}`);
+    const btn = document.getElementById(`btn-toggle-card-${id}`);
+    if (!drawer) return;
+    if (drawer.classList.contains('hidden')) {
+      drawer.classList.remove('hidden');
+      if (btn) btn.innerHTML = `<span class="material-symbols-outlined text-[15px]">expand_less</span><span>छिपाएं</span>`;
+    } else {
+      drawer.classList.add('hidden');
+      if (btn) btn.innerHTML = `<span class="material-symbols-outlined text-[15px]">expand_more</span><span>विवरण</span>`;
+    }
+  },
+
+  // ----------------------------------------------------
+  // BULK NUMBERS & INAUGURATION CAMPAIGN SYSTEM
+  // ----------------------------------------------------
+  openBulkNumbersModal() {
+    const modal = document.getElementById('modal-bulk-numbers');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    const input = document.getElementById('bulk-numbers-input');
+    if (input) {
+      this.parseBulkNumbersInput(input.value);
+      input.focus();
+    }
+  },
+
+  closeBulkNumbersModal() {
+    const modal = document.getElementById('modal-bulk-numbers');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  },
+
+  handleCampaignPresetChange(val) {
+    const promptEl = document.getElementById('bulk-prompt-input');
+    if (!promptEl) return;
+    if (val === 'inauguration') {
+      promptEl.value = 'नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी की नई शाखा के भव्य उद्घाटन समारोह में आप सपरिवार सादर आमंत्रित हैं। 4 नवंबर को पधारकर हमारा उत्साहवर्धन करें। धन्यवाद!';
+    } else if (val === 'krishi_stock') {
+      promptEl.value = 'नमस्ते! रामकुमार खाद भंडार, कुँवरगद्दी से सूचना है। उत्तम गुणवत्ता की यूरिया खाद एवं प्रमाणित गेहूं-सरसों बीज का नया स्टॉक आ गया है। उचित मूल्य पर प्राप्त करने हेतु संपर्क करें।';
+    } else if (val === 'udhar_reminder') {
+      promptEl.value = 'नमस्ते! रामकुमार भंडार से तकादा सूचना है। आपके खाते में पुराना बकाया शेष है। कृपया शीघ्र दुकान पर पधारकर हिसाब चुकता करने का कष्ट करें।';
+    }
+  },
+
+  parseBulkNumbersInput(text) {
+    const raw = text || '';
+    const lines = raw.split(/[\n,;]+/);
+    const contacts = [];
+    const seen = new Set();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const match = trimmed.match(/(?:\+?91[\s-]?)?([6-9]\d{9})/);
+      if (match) {
+        const last10 = match[1];
+        if (!seen.has(last10)) {
+          seen.add(last10);
+          let name = trimmed.replace(match[0], '').replace(/[-:–—()]/g, '').trim();
+          if (!name || name.length < 2) name = 'ग्रामवासी / ग्राहक';
+          contacts.push({
+            name,
+            cleanPhone: last10,
+            phone: `+91 ${last10.slice(0, 5)} ${last10.slice(5)}`
+          });
+        }
+      }
+    }
+
+    const counter = document.getElementById('bulk-numbers-counter');
+    if (counter) {
+      counter.innerText = `✓ ${contacts.length} वैध नंबर मिले`;
+      counter.className = contacts.length > 0 ? 
+        'text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300' :
+        'text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300';
+    }
+
+    return contacts;
+  },
+
+  async fetchCampaignContacts() {
+    try {
+      const res = await fetch('/api/campaign/contacts');
+      if (res.ok) {
+        const data = await res.json();
+        this.campaignContacts = data.contacts || [];
+        const bInaug = document.getElementById('badge-count-inauguration');
+        if (bInaug) bInaug.innerText = this.campaignContacts.length;
+        if (this.currentCallTab === 'inauguration') {
+          this.renderCurrentTab();
+        }
+      }
+    } catch (err) {
+      console.warn('Campaign contacts fetch skipped:', err.message);
+    }
+  },
+
+  async saveBulkNumbersAndStart() {
+    const input = document.getElementById('bulk-numbers-input');
+    const promptEl = document.getElementById('bulk-prompt-input');
+    const campaignSelect = document.getElementById('bulk-campaign-select');
+
+    const text = input ? input.value : '';
+    const contacts = this.parseBulkNumbersInput(text);
+
+    if (contacts.length === 0) {
+      alert('कृपया कम से कम एक 10-अंकों का वैध भारतीय मोबाइल नंबर दर्ज करें');
+      return;
+    }
+
+    const campaignName = campaignSelect ? campaignSelect.options[campaignSelect.selectedIndex]?.text : 'नई किराना दुकान उद्घाटन आमंत्रण';
+    const promptText = promptEl ? promptEl.value.trim() : '';
+
+    const saveBtn = document.getElementById('btn-save-bulk-numbers');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = `<span class="material-symbols-outlined text-[18px] animate-spin">sync</span><span>जोड़ रहे हैं...</span>`;
+    }
+
+    try {
+      const res = await fetch('/api/campaign/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contacts,
+          campaign: campaignName
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'नंबर सहेजने में विफल');
+
+      this.campaignContacts = data.contacts || [];
+      this.closeBulkNumbersModal();
+      if (input) input.value = '';
+
+      AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर सफलतापूर्वक जोड़े गए!`);
+      this.switchCallTab('inauguration');
+
+      // Sequential auto-calling confirmation
+      if (confirm(`क्या आप इन सभी ${contacts.length} नंबरों पर एक-एक करके AI उद्घाटन आमंत्रण कॉल शुरू करना चाहते हैं?\n(एक कॉल समाप्त होने पर दूसरी अपने-आप लगेगी)`)) {
+        this.startSequentialCampaignDial(this.campaignContacts, promptText);
+      }
+    } catch (err) {
+      alert('त्रुटि: ' + err.message);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = `<span class="material-symbols-outlined text-[18px]">phone_in_talk</span><span>✓ सूची जोड़ें और कॉल लगाएं</span>`;
+      }
+    }
+  },
+
+  // ----------------------------------------------------
+  // SEQUENTIAL BACKGROUND CAMPAIGN AUTO-DIALER
+  // Calls one by one in the background; when one ends, initiates the next!
+  // ----------------------------------------------------
+  startSequentialCampaignDial(contactsToDial, promptText = null) {
+    if (!contactsToDial || contactsToDial.length === 0) {
+      alert('कॉल करने के लिए कोई संपर्क नहीं चुना गया');
+      return;
+    }
+
+    const defaultPrompt = promptText || (document.getElementById('bulk-prompt-input')?.value) || 
+      'नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी की नई शाखा के भव्य उद्घाटन समारोह में आप सपरिवार सादर आमंत्रित हैं। 4 नवंबर को पधारकर हमारा उत्साहवर्धन करें। धन्यवाद!';
+
+    this.campaignQueue = contactsToDial.map(c => ({
+      id: c.id,
+      name: c.customerName || c.name || 'ग्रामवासी / ग्राहक',
+      phone: c.phone || c.rawPhone || ('+91 ' + c.cleanPhone),
+      cleanPhone: (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10),
+      prompt: defaultPrompt
+    })).filter(c => c.cleanPhone.length === 10);
+
+    if (this.campaignQueue.length === 0) {
+      alert('चुने हुए संपर्कों में कोई वैध 10-अंकों का नंबर नहीं मिला');
+      return;
+    }
+
+    this.campaignCurrentIndex = 0;
+    this.isCampaignCalling = true;
+    this.isAutoDialPaused = false;
+
+    // Show persistent top banner
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
+    }
+
+    AppState.showToast(`🚀 उद्घाटन आमंत्रण: कुल ${this.campaignQueue.length} नंबरों पर क्रमिक AI कॉलिंग शुरू`);
+    this.processNextSequentialCall();
+  },
+
+  async processNextSequentialCall() {
+    if (!this.isCampaignCalling) return;
+    if (this.isAutoDialPaused) return;
+
+    if (this.campaignCurrentIndex >= this.campaignQueue.length) {
+      this.stopAutoDial();
+      AppState.showToast('🎉 सभी नंबरों पर उद्घाटन आमंत्रण AI कॉल सफलतापूर्वक पूरी हो गई!');
+      await this.fetchCampaignContacts();
+      await this.fetchLiveOmnidimLogs(true);
+      return;
+    }
+
+    const contact = this.campaignQueue[this.campaignCurrentIndex];
+    const total = this.campaignQueue.length;
+    const currentNum = this.campaignCurrentIndex + 1;
+
+    // Update banner UI
+    const progressEl = document.getElementById('calling-banner-progress');
+    const targetEl = document.getElementById('calling-banner-current-target');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (progressEl) progressEl.innerText = `🎈 उद्घाटन आमंत्रण AI कॉलिंग: (${currentNum}/${total})`;
+    if (targetEl) targetEl.innerText = `वर्तमान: ${contact.name} (+91 ${contact.cleanPhone}) • दुकान उद्घाटन`;
+    if (statusEl) {
+      statusEl.innerText = '📞 कॉल लगाई जा रही है...';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700 animate-pulse';
+    }
+
+    // Mark status as 'calling' in local list and backend
+    const localC = (this.campaignContacts || []).find(c => c.cleanPhone === contact.cleanPhone || c.id === contact.id);
+    if (localC) {
+      localC.status = 'calling';
+      this.renderCurrentTab();
+    }
+    fetch('/api/campaign/update-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cleanPhone: contact.cleanPhone, status: 'calling' })
+    }).catch(() => {});
+
+    // Dispatch call via Omnidimension Outgoing Bot (#276578)
+    try {
+      await fetch('/api/omnidim/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 276578,
+          toNumber: '+91' + contact.cleanPhone,
+          prompt: contact.prompt,
+          context: {
+            customerName: contact.name,
+            campaign: 'inauguration',
+            shopName: 'रामकुमार किराना एवं जनरल स्टोर'
+          }
+        })
+      });
+    } catch (err) {
+      console.warn('Call dispatch error:', err);
+    }
+
+    if (statusEl) {
+      statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
+    }
+
+    // Poll Omnidimension Call Logs to detect call completion
+    // Wait until call finishes (or max 75 seconds timeout)
+    const startTime = Date.now();
+    const maxPollTimeMs = 75000;
+    let callEnded = false;
+    let finalStatus = 'failed';
+    let durationStr = '00:00';
+    let summary = '';
+    let audioUrl = null;
+
+    while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
+      if (!this.isCampaignCalling) return;
+      if (this.isAutoDialPaused) {
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      await new Promise(r => setTimeout(r, 3500));
+
+      try {
+        const logsRes = await fetch('/api/omnidim/call-logs');
+        const logsData = await logsRes.json();
+        const logs = logsData.calls || [];
+
+        const matchingLog = logs.find(l => {
+          const toClean = (l.to_number || '').replace(/\D/g, '');
+          const fromClean = (l.from_number || '').replace(/\D/g, '');
+          return toClean.endsWith(contact.cleanPhone) || fromClean.endsWith(contact.cleanPhone);
+        });
+
+        if (matchingLog) {
+          const rawStatus = (matchingLog.call_status || '').toLowerCase();
+          const durationSec = matchingLog.call_duration_in_seconds || 0;
+          const durationMin = matchingLog.call_duration_in_minutes || 0;
+          const totalSec = (durationMin * 60) + durationSec;
+
+          if (rawStatus === 'completed') {
+            callEnded = true;
+            finalStatus = totalSec > 0 ? 'connected' : 'failed';
+            durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
+            summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'उद्घाटन आमंत्रण सफल' : 'कॉल कनेक्ट नहीं हुई');
+            audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
+            if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://omnidim.io' + audioUrl;
+            break;
+          } else if (rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed') {
+            callEnded = true;
+            finalStatus = 'failed';
+            durationStr = '00:00';
+            summary = rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा (No Answer)' : (rawStatus === 'busy' ? 'फोन व्यस्त था (Busy)' : 'नेटवर्क समस्या (Failed)');
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn('Polling logs error:', e);
+      }
+    }
+
+    if (!callEnded) {
+      finalStatus = 'failed';
+      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+    }
+
+    // Persist final status to server and state
+    try {
+      await fetch('/api/campaign/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cleanPhone: contact.cleanPhone,
+          status: finalStatus,
+          durationStr,
+          summary,
+          audioUrl
+        })
+      });
+    } catch (e) {}
+
+    if (localC) {
+      localC.status = finalStatus;
+      localC.durationStr = durationStr;
+      localC.summary = summary;
+      localC.audioUrl = audioUrl;
+      localC.lastCallAt = new Date().toISOString();
+    }
+    this.renderCurrentTab();
+
+    if (statusEl) {
+      statusEl.innerText = finalStatus === 'connected' ? '✅ बातचीत पूरी हुई • अगली कॉल...' : '❌ कॉल नहीं उठी • अगली कॉल...';
+      statusEl.className = finalStatus === 'connected' ? 
+        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700' :
+        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
+    }
+
+    // Move to next contact in queue!
+    this.campaignCurrentIndex++;
+
+    // Polite pause of 2.5 seconds between calls
+    setTimeout(() => {
+      this.processNextSequentialCall();
+    }, 2500);
+  },
+
   playSampleAudio(callId) {
     AppState.showToast('🔊 ऑडियो रिकॉर्डिंग चलाई जा रही है...');
-    // Web Audio API Beep/Simulation
     try {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = audioCtx.createOscillator();
@@ -287,7 +2123,7 @@ const TelephonyUI = {
       osc.start();
       osc.stop(audioCtx.currentTime + 0.3);
     } catch (e) {
-      // AudioContext not allowed without gesture
+      // AudioContext fallback
     }
   },
 
@@ -365,120 +2201,6 @@ const TelephonyUI = {
     } catch (err) {
       alert('कॉल सिम्युलेशन त्रुटि: ' + err.message);
     }
-  },
-
-  async fetchLiveOmnidimLogs() {
-    const container = document.getElementById('omnidim-call-logs-container');
-    if (!container) return;
-    
-    container.innerHTML = `
-      <div class="p-4 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex items-center justify-center gap-2">
-        <span class="material-symbols-outlined text-[18px] animate-spin">sync</span>
-        <span>Omnidimension AI सर्वर से लाइव कॉल लोड हो रही हैं...</span>
-      </div>
-    `;
-
-    try {
-      const res = await fetch('/api/omnidim/call-logs');
-      if (!res.ok) throw new Error('सर्वर से डेटा नहीं मिला');
-      const data = await res.json();
-      const logs = data.logs || [];
-      this.renderLiveOmnidimLogs(logs);
-    } catch (err) {
-      container.innerHTML = `
-        <div class="p-4 bg-rose-50 rounded-2xl text-center text-rose-700 text-xs">
-          ⚠️ कॉल लॉग प्राप्त करने में त्रुटि: ${err.message}
-        </div>
-      `;
-    }
-  },
-
-  renderLiveOmnidimLogs(logs) {
-    const container = document.getElementById('omnidim-call-logs-container');
-    if (!container) return;
-
-    if (!logs || logs.length === 0) {
-      container.innerHTML = `
-        <div class="p-6 bg-white rounded-2xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200">
-          <span class="material-symbols-outlined text-[36px] text-slate-400">call_missed</span>
-          <p class="font-bold text-slate-700 text-sm">अभी कोई लाइव कॉल रिकॉर्ड नहीं है</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = logs.map(call => {
-      const isOutbound = call.call_direction === 'outbound';
-      const dirIcon = isOutbound ? 'call_made' : 'call_received';
-      const dirColor = isOutbound ? 'text-indigo-700 bg-indigo-50 border-indigo-200' : 'text-emerald-700 bg-emerald-50 border-emerald-200';
-      const dirLabel = isOutbound ? 'आउटगोइंग तकादा' : 'इनकमिंग पूछताछ';
-      const phone = call.to_number || call.from_number || 'नंबर उपलब्ध नहीं';
-      const durationSec = call.call_duration_in_seconds || 0;
-      const durationMin = call.call_duration_in_minutes || 0;
-      const durationStr = durationMin > 0 ? `${durationMin} मिनट ${durationSec} सेकंड` : `${durationSec} सेकंड`;
-      const audioUrl = call.internal_recording_url || call.recording_url;
-
-      let convHtml = '';
-      if (call.call_conversation) {
-        convHtml = `
-          <div class="mt-2 p-3 bg-slate-50 rounded-xl text-xs text-slate-700 max-h-36 overflow-y-auto border border-slate-200/80">
-            <span class="font-bold text-slate-900 block mb-1">📝 बातचीत ट्रांसक्रिप्ट:</span>
-            <div class="space-y-1">${call.call_conversation}</div>
-          </div>
-        `;
-      } else if (call.sentiment_analysis_details) {
-        convHtml = `
-          <div class="mt-2 p-2.5 bg-slate-50 rounded-xl text-xs text-slate-700 border border-slate-200">
-            <strong>बातचीत सारांश:</strong> ${call.sentiment_analysis_details}
-          </div>
-        `;
-      }
-
-      return `
-        <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2.5">
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <div class="w-10 h-10 rounded-xl flex items-center justify-center ${dirColor} border flex-shrink-0">
-                <span class="material-symbols-outlined text-[20px]">${dirIcon}</span>
-              </div>
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="font-bold text-slate-900 text-sm md:text-base">${phone}</span>
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${dirColor} border">
-                    ${dirLabel}
-                  </span>
-                </div>
-                <span class="text-xs text-slate-500 font-medium">${call.time_of_call || 'आज'} • ${call.bot_name || 'AI Agent'}</span>
-              </div>
-            </div>
-            <div class="text-right flex-shrink-0">
-              <span class="text-xs font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                ${durationStr}
-              </span>
-            </div>
-          </div>
-
-          ${convHtml}
-
-          <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-            <div class="flex items-center gap-2">
-              ${audioUrl ? `
-                <a href="${audioUrl}" target="_blank" class="h-8 px-3 rounded-lg bg-emerald-700 text-white font-bold flex items-center gap-1 shadow-xs active:scale-95 transition-all">
-                  <span class="material-symbols-outlined text-[16px]">play_arrow</span>
-                  <span>ऑडियो सुनें</span>
-                </a>
-              ` : `
-                <span class="text-slate-400">ऑडियो उपलब्ध नहीं</span>
-              `}
-            </div>
-            <a href="tel:${phone.replace(/[^\d+]/g, '')}" class="h-8 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold flex items-center gap-1">
-              <span class="material-symbols-outlined text-[16px]">phone</span>
-              <span>कॉल करें</span>
-            </a>
-          </div>
-        </div>
-      `;
-    }).join('');
   },
 
   openManualOutboundModal(prefill = {}) {

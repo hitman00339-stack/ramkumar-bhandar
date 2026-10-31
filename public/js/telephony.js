@@ -17,13 +17,20 @@ const TelephonyUI = {
   autoDialCurrentIndex: 0,
   autoDialTimer: null,
 
+  // Inauguration Campaign State
+  campaignContacts: [],
+  campaignQueue: [],
+  campaignCurrentIndex: 0,
+  isCampaignCalling: false,
+
   init() {
     this.setupListeners();
     this.fetchLiveOmnidimLogs();
+    this.fetchCampaignContacts();
 
     // Auto-refresh Omnidimension logs every 20 seconds when visible
     setInterval(() => {
-      if (document.visibilityState === 'visible' && !this.isAutoDialing) {
+      if (document.visibilityState === 'visible' && !this.isAutoDialing && !this.isCampaignCalling) {
         this.fetchLiveOmnidimLogs(true);
       }
     }, 20000);
@@ -220,7 +227,7 @@ const TelephonyUI = {
     this.currentCallTab = tab;
     this.selectedInTab.clear();
 
-    const tabs = ['all', 'connected', 'failed', 'pending', 'total_all'];
+    const tabs = ['all', 'connected', 'failed', 'pending', 'total_all', 'inauguration'];
     tabs.forEach(t => {
       const btn = document.getElementById(`tab-btn-${t}`);
       if (btn) {
@@ -462,6 +469,65 @@ const TelephonyUI = {
 
     let allCalls = [...omniCalls, ...localCalls];
 
+    // Inauguration Campaign Contacts
+    const inaugurationCalls = (this.campaignContacts || []).map(c => {
+      const isConnected = c.status === 'connected';
+      const isFailed = c.status === 'failed';
+      const isCalling = c.status === 'calling';
+      const isPending = !isConnected && !isFailed && !isCalling;
+
+      let statusText = '⏳ कॉल बाकी';
+      let statusClass = 'bg-amber-100 text-amber-900 border-amber-300';
+      if (isConnected) {
+        statusText = '✅ बात हुई';
+        statusClass = 'bg-emerald-100 text-emerald-900 border-emerald-300';
+      } else if (isFailed) {
+        statusText = '❌ नहीं उठा / नहीं लगा';
+        statusClass = 'bg-rose-100 text-rose-900 border-rose-300';
+      } else if (isCalling) {
+        statusText = '📞 कॉल जारी...';
+        statusClass = 'bg-sky-100 text-sky-900 border-sky-300 animate-pulse';
+      }
+
+      const cleanPhone = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      const formatted = cleanPhone.length === 10 ? `+91 ${cleanPhone.slice(0, 5)} ${cleanPhone.slice(5)}` : (c.phone || cleanPhone);
+
+      return {
+        id: String(c.id),
+        phone: formatted,
+        rawPhone: cleanPhone,
+        customerName: c.name || 'ग्रामवासी / ग्राहक',
+        village: c.campaign || 'उद्घाटन आमंत्रण',
+        dueAmount: 0,
+        shopId: 'kirana',
+        direction: 'outbound',
+        durationSec: c.durationSec || 0,
+        durationMin: 0,
+        durationStr: c.durationStr || (isConnected ? '01:00' : '00:00'),
+        isConnected,
+        isFailed,
+        isPending,
+        isCalling,
+        failReason: isFailed ? 'फोन नहीं उठा या व्यस्त था' : '',
+        statusText,
+        statusClass,
+        time: c.lastCallAt ? new Date(c.lastCallAt).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : (c.addedAt ? 'आज' : 'नया'),
+        summary: c.summary || (isConnected ? 'उद्घाटन आमंत्रण सफल बातचीत' : (isCalling ? '📞 कॉल जारी है...' : 'किराना स्टोर उद्घाटन (4 नवंबर) आमंत्रण')),
+        transcript: c.transcript || '',
+        audioUrl: c.audioUrl || null,
+        isCampaign: true
+      };
+    }).filter(c => {
+      if (!this.searchQuery) return true;
+      return (c.phone && c.phone.includes(this.searchQuery)) ||
+             (c.customerName && c.customerName.toLowerCase().includes(this.searchQuery)) ||
+             (c.summary && c.summary.toLowerCase().includes(this.searchQuery));
+    });
+
+    // Merge attempted campaign calls into allCalls
+    const attemptedCampaignCalls = inaugurationCalls.filter(c => c.isConnected || c.isFailed || c.isCalling);
+    allCalls = [...allCalls, ...attemptedCampaignCalls];
+
     // Filter by Shop Wing
     if (this.currentWingFilter !== 'all') {
       allCalls = allCalls.filter(c => c.shopId === this.currentWingFilter);
@@ -493,7 +559,7 @@ const TelephonyUI = {
     const connectedCalls = allCalls.filter(c => c.isConnected);
     const failedCalls = allCalls.filter(c => c.isFailed);
 
-    // Combined Total List: All dialed calls + pending customers
+    // Combined Total List: All dialed calls + pending customers + inauguration list
     const pendingAsCalls = pendingCustomers.map(p => {
       const due = (p.balancesRupees ? p.balancesRupees[shopId] : (p.balances?.[shopId] ? p.balances[shopId] / 100 : 0)) || 0;
       return {
@@ -527,7 +593,8 @@ const TelephonyUI = {
       connectedCalls,
       failedCalls,
       pendingCustomers,
-      totalAllList
+      totalAllList,
+      inaugurationCalls
     };
   },
 
@@ -536,7 +603,7 @@ const TelephonyUI = {
     if (!container) return;
 
     const data = this.getProcessedData();
-    const { allCalls, connectedCalls, failedCalls, pendingCustomers, totalAllList } = data;
+    const { allCalls, connectedCalls, failedCalls, pendingCustomers, totalAllList, inaugurationCalls } = data;
 
     // Update KPI Card Displays
     const kpiTotal = document.getElementById('kpi-total-calls');
@@ -554,11 +621,13 @@ const TelephonyUI = {
     const bFail = document.getElementById('badge-count-failed');
     const bPend = document.getElementById('badge-count-pending');
     const bTotAll = document.getElementById('badge-count-total_all');
+    const bInaug = document.getElementById('badge-count-inauguration');
     if (bAll) bAll.innerText = allCalls.length;
     if (bConn) bConn.innerText = connectedCalls.length;
     if (bFail) bFail.innerText = failedCalls.length;
     if (bPend) bPend.innerText = pendingCustomers.length;
     if (bTotAll) bTotAll.innerText = totalAllList.length;
+    if (bInaug) bInaug.innerText = inaugurationCalls.length;
 
     // Show/Hide Batch Toolbar
     const toolbar = document.getElementById('call-tab-toolbar');
@@ -567,7 +636,7 @@ const TelephonyUI = {
     if (selectedCountEl) selectedCountEl.innerText = selectedCount;
 
     if (toolbar) {
-      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed') {
+      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'inauguration') {
         toolbar.classList.remove('hidden');
         toolbar.classList.add('flex');
       } else {
@@ -587,6 +656,8 @@ const TelephonyUI = {
       isPendingTab = true;
     } else if (this.currentCallTab === 'total_all') {
       activeList = totalAllList;
+    } else if (this.currentCallTab === 'inauguration') {
+      activeList = inaugurationCalls;
     }
 
     // Render by Selected View Mode
@@ -1073,7 +1144,7 @@ const TelephonyUI = {
   },
 
   // ----------------------------------------------------
-  // 4. CARDS VIEW (मोबाइल टच कार्ड्स)
+  // 4. CARDS VIEW (मोबाइल टच कार्ड्स — कॉम्पैक्ट व स्वच्छ)
   // ----------------------------------------------------
   renderCardsView(calls) {
     if (!calls || calls.length === 0) {
@@ -1086,51 +1157,90 @@ const TelephonyUI = {
     return `
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         ${calls.map(c => `
-          <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-2.5">
+          <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-2.5 transition-all">
+            <!-- Header: Checkbox, Name, Phone, Status & Duration -->
             <div class="flex items-start justify-between gap-2">
               <div class="flex items-center gap-2.5 min-w-0">
                 <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-emerald-600 cursor-pointer shrink-0"/>
                 <div class="min-w-0">
                   <h4 class="font-bold text-slate-900 text-sm truncate">${c.customerName}</h4>
-                  <span class="text-xs font-mono font-bold text-slate-600">${c.phone} • ${c.time}</span>
+                  <div class="flex items-center gap-1.5 text-xs text-slate-500">
+                    <span class="font-mono font-bold text-slate-700">${c.phone}</span>
+                    <span>•</span>
+                    <span class="text-[11px]">${c.time}</span>
+                  </div>
                 </div>
               </div>
-              <span class="px-2 py-0.5 rounded-full border text-[10px] font-bold ${c.statusClass}">
-                ${c.statusText} (${c.durationStr})
-              </span>
+              <div class="flex flex-col items-end gap-1 shrink-0">
+                <span class="px-2.5 py-0.5 rounded-full border text-[11px] font-bold ${c.statusClass}">
+                  ${c.statusText}
+                </span>
+                <span class="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                  ⏱️ ${c.durationStr}
+                </span>
+              </div>
             </div>
 
-            ${c.summary ? `
-              <div class="bg-slate-50 p-2.5 rounded-2xl border border-slate-100 text-xs text-slate-700">
-                <strong class="text-slate-900">📝 बातचीत:</strong> ${c.summary}
-              </div>
-            ` : ''}
-
-            <div class="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
-              <div class="flex items-center gap-2">
+            <!-- Controls Row: Inline Audio (No Redirect) + View Details + Call & WhatsApp -->
+            <div class="flex items-center justify-between pt-2 border-t border-slate-100 gap-2 flex-wrap">
+              <div class="flex items-center gap-1.5">
                 ${c.audioUrl ? `
-                  <audio controls preload="none" class="h-8 max-w-[170px] rounded" src="${c.audioUrl}"></audio>
-                ` : `
-                  <button onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-8 px-2.5 rounded-lg bg-emerald-50 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200">
-                    <span class="material-symbols-outlined text-[14px]">play_arrow</span>
+                  <audio controls preload="none" class="h-8 max-w-[155px] sm:max-w-[175px] rounded-lg border border-slate-200 bg-slate-50" src="${c.audioUrl}"></audio>
+                ` : (c.isConnected ? `
+                  <button type="button" onclick="TelephonyUI.playSampleAudio('${c.id}')" class="h-8 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 border border-emerald-200 cursor-pointer transition-all">
+                    <span class="material-symbols-outlined text-[15px] text-emerald-700">play_arrow</span>
                     <span>ऑडियो</span>
                   </button>
-                `}
-                ${c.transcript ? `
-                  <button onclick="TelephonyUI.openConversationModal('${c.id}')" class="text-xs font-bold text-indigo-700 hover:underline">
-                    चैट देखें
-                  </button>
-                ` : ''}
+                ` : `
+                  <span class="text-slate-400 text-[11px] font-medium">ऑडियो नहीं</span>
+                `)}
+
+                <!-- Toggle Details Button (Click to reveal summary & full transcript) -->
+                <button type="button" onclick="TelephonyUI.toggleCardDetails('${c.id}')" id="btn-toggle-card-${c.id}" class="h-8 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 cursor-pointer transition-all" title="बातचीत का पूरा विवरण देखें">
+                  <span class="material-symbols-outlined text-[15px]">expand_more</span>
+                  <span>विवरण</span>
+                </button>
               </div>
-              <div class="flex items-center gap-1.5">
-                <button onclick="TelephonyUI.redialCustomer('${c.phone}', '${c.customerName}')" class="h-8 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95">
+
+              <div class="flex items-center gap-1.5 ml-auto">
+                <button type="button" onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-8 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer">
                   <span class="material-symbols-outlined text-[15px]">call</span>
                   <span>कॉल</span>
                 </button>
-                <a href="https://wa.me/${c.phone.replace(/\D/g, '')}" target="_blank" class="h-8 w-8 rounded-xl bg-emerald-50 text-emerald-900 flex items-center justify-center border border-emerald-200">
-                  <span class="material-symbols-outlined text-[15px] text-emerald-700">chat</span>
-                </a>
+                ${c.rawPhone ? `
+                  <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20के%20संदर्भ%20में।" target="_blank" class="h-8 w-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center justify-center border border-emerald-200 active:scale-95 transition-all" title="व्हाट्सऐप भेजें">
+                    <span class="material-symbols-outlined text-[15px] text-emerald-700">chat</span>
+                  </a>
+                ` : ''}
               </div>
+            </div>
+
+            <!-- Expandable Details: Summary & Full Transcript (Hidden by default, shown on click) -->
+            <div id="card-details-${c.id}" class="hidden pt-2.5 border-t border-slate-100 flex flex-col gap-2 transition-all">
+              ${c.summary ? `
+                <div class="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800">
+                  <strong class="text-slate-900 block mb-0.5">📝 बातचीत सारांश:</strong>
+                  <span>${c.summary}</span>
+                </div>
+              ` : ''}
+
+              ${c.transcript ? `
+                <div class="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-xs text-slate-700 max-h-48 overflow-y-auto">
+                  <div class="flex items-center justify-between mb-1">
+                    <strong class="text-slate-900">💬 पूरी बातचीत ट्रांसक्रिप्ट:</strong>
+                    <button type="button" onclick="TelephonyUI.openConversationModal('${c.id}')" class="text-indigo-700 hover:underline font-bold text-[11px]">
+                      फुल स्क्रीन देखें ↗
+                    </button>
+                  </div>
+                  <div class="space-y-1 font-mono text-[11px] text-slate-800 leading-relaxed">${c.transcript}</div>
+                </div>
+              ` : ''}
+
+              ${c.failReason ? `
+                <div class="bg-rose-50 p-2 rounded-xl border border-rose-200 text-xs text-rose-800">
+                  <strong>कारण:</strong> ${c.failReason}
+                </div>
+              ` : ''}
             </div>
           </div>
         `).join('')}
@@ -1442,12 +1552,28 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           shopId: AppState.currentShopId
         };
       }).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
-    }
-      }).filter(c => c.phone);
+    } else if (this.currentCallTab === 'inauguration') {
+      toCall = (data.inaugurationCalls || []).map(c => ({
+        id: c.id,
+        name: c.customerName,
+        phone: c.rawPhone || c.phone,
+        cleanPhone: c.rawPhone,
+        due: 0,
+        shopId: 'kirana',
+        campaign: 'inauguration'
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
     }
 
     if (toCall.length === 0) {
       alert('कॉल करने के लिए कोई वैध नंबर नहीं चुना गया');
+      return;
+    }
+
+    if (this.currentCallTab === 'inauguration') {
+      if (confirm(`क्या आप उद्घाटन आमंत्रण हेतु चुने हुए ${toCall.length} नंबरों पर एक-एक करके बैकग्राउंड AI कॉलिंग शुरू करना चाहते हैं?`)) {
+        this.selectedInTab.clear();
+        this.startSequentialCampaignDial(toCall);
+      }
       return;
     }
 
@@ -1594,14 +1720,20 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     } else {
       if (btn) btn.innerText = '⏸️ रोकें';
       AppState.showToast('AI कॉलिंग पुनः शुरू');
-      this.processNextAutoDial();
+      if (this.isCampaignCalling) {
+        this.processNextSequentialCall();
+      } else {
+        this.processNextAutoDial();
+      }
     }
   },
 
   stopAutoDial() {
     this.isAutoDialing = false;
+    this.isCampaignCalling = false;
     this.isAutoDialPaused = false;
     this.autoDialQueue = [];
+    this.campaignQueue = [];
     if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
 
     const banner = document.getElementById('active-calling-banner');
@@ -1609,6 +1741,372 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       banner.classList.add('hidden');
       banner.classList.remove('flex');
     }
+  },
+
+  // ----------------------------------------------------
+  // CARD DETAILS TOGGLE (विवरण दिखाएं / छिपाएं)
+  // ----------------------------------------------------
+  toggleCardDetails(id) {
+    const drawer = document.getElementById(`card-details-${id}`);
+    const btn = document.getElementById(`btn-toggle-card-${id}`);
+    if (!drawer) return;
+    if (drawer.classList.contains('hidden')) {
+      drawer.classList.remove('hidden');
+      if (btn) btn.innerHTML = `<span class="material-symbols-outlined text-[15px]">expand_less</span><span>छिपाएं</span>`;
+    } else {
+      drawer.classList.add('hidden');
+      if (btn) btn.innerHTML = `<span class="material-symbols-outlined text-[15px]">expand_more</span><span>विवरण</span>`;
+    }
+  },
+
+  // ----------------------------------------------------
+  // BULK NUMBERS & INAUGURATION CAMPAIGN SYSTEM
+  // ----------------------------------------------------
+  openBulkNumbersModal() {
+    const modal = document.getElementById('modal-bulk-numbers');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    const input = document.getElementById('bulk-numbers-input');
+    if (input) {
+      this.parseBulkNumbersInput(input.value);
+      input.focus();
+    }
+  },
+
+  closeBulkNumbersModal() {
+    const modal = document.getElementById('modal-bulk-numbers');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  },
+
+  handleCampaignPresetChange(val) {
+    const promptEl = document.getElementById('bulk-prompt-input');
+    if (!promptEl) return;
+    if (val === 'inauguration') {
+      promptEl.value = 'नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी की नई शाखा के भव्य उद्घाटन समारोह में आप सपरिवार सादर आमंत्रित हैं। 4 नवंबर को पधारकर हमारा उत्साहवर्धन करें। धन्यवाद!';
+    } else if (val === 'krishi_stock') {
+      promptEl.value = 'नमस्ते! रामकुमार खाद भंडार, कुँवरगद्दी से सूचना है। उत्तम गुणवत्ता की यूरिया खाद एवं प्रमाणित गेहूं-सरसों बीज का नया स्टॉक आ गया है। उचित मूल्य पर प्राप्त करने हेतु संपर्क करें।';
+    } else if (val === 'udhar_reminder') {
+      promptEl.value = 'नमस्ते! रामकुमार भंडार से तकादा सूचना है। आपके खाते में पुराना बकाया शेष है। कृपया शीघ्र दुकान पर पधारकर हिसाब चुकता करने का कष्ट करें।';
+    }
+  },
+
+  parseBulkNumbersInput(text) {
+    const raw = text || '';
+    const lines = raw.split(/[\n,;]+/);
+    const contacts = [];
+    const seen = new Set();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const match = trimmed.match(/(?:\+?91[\s-]?)?([6-9]\d{9})/);
+      if (match) {
+        const last10 = match[1];
+        if (!seen.has(last10)) {
+          seen.add(last10);
+          let name = trimmed.replace(match[0], '').replace(/[-:–—()]/g, '').trim();
+          if (!name || name.length < 2) name = 'ग्रामवासी / ग्राहक';
+          contacts.push({
+            name,
+            cleanPhone: last10,
+            phone: `+91 ${last10.slice(0, 5)} ${last10.slice(5)}`
+          });
+        }
+      }
+    }
+
+    const counter = document.getElementById('bulk-numbers-counter');
+    if (counter) {
+      counter.innerText = `✓ ${contacts.length} वैध नंबर मिले`;
+      counter.className = contacts.length > 0 ? 
+        'text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300' :
+        'text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300';
+    }
+
+    return contacts;
+  },
+
+  async fetchCampaignContacts() {
+    try {
+      const res = await fetch('/api/campaign/contacts');
+      if (res.ok) {
+        const data = await res.json();
+        this.campaignContacts = data.contacts || [];
+        const bInaug = document.getElementById('badge-count-inauguration');
+        if (bInaug) bInaug.innerText = this.campaignContacts.length;
+        if (this.currentCallTab === 'inauguration') {
+          this.renderCurrentTab();
+        }
+      }
+    } catch (err) {
+      console.warn('Campaign contacts fetch skipped:', err.message);
+    }
+  },
+
+  async saveBulkNumbersAndStart() {
+    const input = document.getElementById('bulk-numbers-input');
+    const promptEl = document.getElementById('bulk-prompt-input');
+    const campaignSelect = document.getElementById('bulk-campaign-select');
+
+    const text = input ? input.value : '';
+    const contacts = this.parseBulkNumbersInput(text);
+
+    if (contacts.length === 0) {
+      alert('कृपया कम से कम एक 10-अंकों का वैध भारतीय मोबाइल नंबर दर्ज करें');
+      return;
+    }
+
+    const campaignName = campaignSelect ? campaignSelect.options[campaignSelect.selectedIndex]?.text : 'नई किराना दुकान उद्घाटन आमंत्रण';
+    const promptText = promptEl ? promptEl.value.trim() : '';
+
+    const saveBtn = document.getElementById('btn-save-bulk-numbers');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = `<span class="material-symbols-outlined text-[18px] animate-spin">sync</span><span>जोड़ रहे हैं...</span>`;
+    }
+
+    try {
+      const res = await fetch('/api/campaign/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contacts,
+          campaign: campaignName
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'नंबर सहेजने में विफल');
+
+      this.campaignContacts = data.contacts || [];
+      this.closeBulkNumbersModal();
+      if (input) input.value = '';
+
+      AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर सफलतापूर्वक जोड़े गए!`);
+      this.switchCallTab('inauguration');
+
+      // Sequential auto-calling confirmation
+      if (confirm(`क्या आप इन सभी ${contacts.length} नंबरों पर एक-एक करके AI उद्घाटन आमंत्रण कॉल शुरू करना चाहते हैं?\n(एक कॉल समाप्त होने पर दूसरी अपने-आप लगेगी)`)) {
+        this.startSequentialCampaignDial(this.campaignContacts, promptText);
+      }
+    } catch (err) {
+      alert('त्रुटि: ' + err.message);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = `<span class="material-symbols-outlined text-[18px]">phone_in_talk</span><span>✓ सूची जोड़ें और कॉल लगाएं</span>`;
+      }
+    }
+  },
+
+  // ----------------------------------------------------
+  // SEQUENTIAL BACKGROUND CAMPAIGN AUTO-DIALER
+  // Calls one by one in the background; when one ends, initiates the next!
+  // ----------------------------------------------------
+  startSequentialCampaignDial(contactsToDial, promptText = null) {
+    if (!contactsToDial || contactsToDial.length === 0) {
+      alert('कॉल करने के लिए कोई संपर्क नहीं चुना गया');
+      return;
+    }
+
+    const defaultPrompt = promptText || (document.getElementById('bulk-prompt-input')?.value) || 
+      'नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी की नई शाखा के भव्य उद्घाटन समारोह में आप सपरिवार सादर आमंत्रित हैं। 4 नवंबर को पधारकर हमारा उत्साहवर्धन करें। धन्यवाद!';
+
+    this.campaignQueue = contactsToDial.map(c => ({
+      id: c.id,
+      name: c.customerName || c.name || 'ग्रामवासी / ग्राहक',
+      phone: c.phone || c.rawPhone || ('+91 ' + c.cleanPhone),
+      cleanPhone: (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10),
+      prompt: defaultPrompt
+    })).filter(c => c.cleanPhone.length === 10);
+
+    if (this.campaignQueue.length === 0) {
+      alert('चुने हुए संपर्कों में कोई वैध 10-अंकों का नंबर नहीं मिला');
+      return;
+    }
+
+    this.campaignCurrentIndex = 0;
+    this.isCampaignCalling = true;
+    this.isAutoDialPaused = false;
+
+    // Show persistent top banner
+    const banner = document.getElementById('active-calling-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
+    }
+
+    AppState.showToast(`🚀 उद्घाटन आमंत्रण: कुल ${this.campaignQueue.length} नंबरों पर क्रमिक AI कॉलिंग शुरू`);
+    this.processNextSequentialCall();
+  },
+
+  async processNextSequentialCall() {
+    if (!this.isCampaignCalling) return;
+    if (this.isAutoDialPaused) return;
+
+    if (this.campaignCurrentIndex >= this.campaignQueue.length) {
+      this.stopAutoDial();
+      AppState.showToast('🎉 सभी नंबरों पर उद्घाटन आमंत्रण AI कॉल सफलतापूर्वक पूरी हो गई!');
+      await this.fetchCampaignContacts();
+      await this.fetchLiveOmnidimLogs(true);
+      return;
+    }
+
+    const contact = this.campaignQueue[this.campaignCurrentIndex];
+    const total = this.campaignQueue.length;
+    const currentNum = this.campaignCurrentIndex + 1;
+
+    // Update banner UI
+    const progressEl = document.getElementById('calling-banner-progress');
+    const targetEl = document.getElementById('calling-banner-current-target');
+    const statusEl = document.getElementById('calling-banner-status');
+
+    if (progressEl) progressEl.innerText = `🎈 उद्घाटन आमंत्रण AI कॉलिंग: (${currentNum}/${total})`;
+    if (targetEl) targetEl.innerText = `वर्तमान: ${contact.name} (+91 ${contact.cleanPhone}) • दुकान उद्घाटन`;
+    if (statusEl) {
+      statusEl.innerText = '📞 कॉल लगाई जा रही है...';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700 animate-pulse';
+    }
+
+    // Mark status as 'calling' in local list and backend
+    const localC = (this.campaignContacts || []).find(c => c.cleanPhone === contact.cleanPhone || c.id === contact.id);
+    if (localC) {
+      localC.status = 'calling';
+      this.renderCurrentTab();
+    }
+    fetch('/api/campaign/update-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cleanPhone: contact.cleanPhone, status: 'calling' })
+    }).catch(() => {});
+
+    // Dispatch call via Omnidimension Outgoing Bot (#276578)
+    try {
+      await fetch('/api/omnidim/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 276578,
+          toNumber: '+91' + contact.cleanPhone,
+          prompt: contact.prompt,
+          context: {
+            customerName: contact.name,
+            campaign: 'inauguration',
+            shopName: 'रामकुमार किराना एवं जनरल स्टोर'
+          }
+        })
+      });
+    } catch (err) {
+      console.warn('Call dispatch error:', err);
+    }
+
+    if (statusEl) {
+      statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
+      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
+    }
+
+    // Poll Omnidimension Call Logs to detect call completion
+    // Wait until call finishes (or max 75 seconds timeout)
+    const startTime = Date.now();
+    const maxPollTimeMs = 75000;
+    let callEnded = false;
+    let finalStatus = 'failed';
+    let durationStr = '00:00';
+    let summary = '';
+    let audioUrl = null;
+
+    while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
+      if (!this.isCampaignCalling) return;
+      if (this.isAutoDialPaused) {
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      await new Promise(r => setTimeout(r, 3500));
+
+      try {
+        const logsRes = await fetch('/api/omnidim/call-logs');
+        const logsData = await logsRes.json();
+        const logs = logsData.calls || [];
+
+        const matchingLog = logs.find(l => {
+          const toClean = (l.to_number || '').replace(/\D/g, '');
+          const fromClean = (l.from_number || '').replace(/\D/g, '');
+          return toClean.endsWith(contact.cleanPhone) || fromClean.endsWith(contact.cleanPhone);
+        });
+
+        if (matchingLog) {
+          const rawStatus = (matchingLog.call_status || '').toLowerCase();
+          const durationSec = matchingLog.call_duration_in_seconds || 0;
+          const durationMin = matchingLog.call_duration_in_minutes || 0;
+          const totalSec = (durationMin * 60) + durationSec;
+
+          if (rawStatus === 'completed') {
+            callEnded = true;
+            finalStatus = totalSec > 0 ? 'connected' : 'failed';
+            durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
+            summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'उद्घाटन आमंत्रण सफल' : 'कॉल कनेक्ट नहीं हुई');
+            audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
+            if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://omnidim.io' + audioUrl;
+            break;
+          } else if (rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed') {
+            callEnded = true;
+            finalStatus = 'failed';
+            durationStr = '00:00';
+            summary = rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा (No Answer)' : (rawStatus === 'busy' ? 'फोन व्यस्त था (Busy)' : 'नेटवर्क समस्या (Failed)');
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn('Polling logs error:', e);
+      }
+    }
+
+    if (!callEnded) {
+      finalStatus = 'failed';
+      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+    }
+
+    // Persist final status to server and state
+    try {
+      await fetch('/api/campaign/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cleanPhone: contact.cleanPhone,
+          status: finalStatus,
+          durationStr,
+          summary,
+          audioUrl
+        })
+      });
+    } catch (e) {}
+
+    if (localC) {
+      localC.status = finalStatus;
+      localC.durationStr = durationStr;
+      localC.summary = summary;
+      localC.audioUrl = audioUrl;
+      localC.lastCallAt = new Date().toISOString();
+    }
+    this.renderCurrentTab();
+
+    if (statusEl) {
+      statusEl.innerText = finalStatus === 'connected' ? '✅ बातचीत पूरी हुई • अगली कॉल...' : '❌ कॉल नहीं उठी • अगली कॉल...';
+      statusEl.className = finalStatus === 'connected' ? 
+        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700' :
+        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
+    }
+
+    // Move to next contact in queue!
+    this.campaignCurrentIndex++;
+
+    // Polite pause of 2.5 seconds between calls
+    setTimeout(() => {
+      this.processNextSequentialCall();
+    }, 2500);
   },
 
   playSampleAudio(callId) {

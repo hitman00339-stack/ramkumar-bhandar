@@ -5,6 +5,7 @@ const KhatabookUI = {
   searchQuery: '',
   activeCustomer: null,
   ledgerDateFilter: '',
+  selectedCustomerIds: new Set(),
 
   init() {
     this.setupListeners();
@@ -251,7 +252,87 @@ const KhatabookUI = {
       return;
     }
 
-    container.innerHTML = customers.map(c => this.renderCustomerCard(c, shopId, todayStr)).join('');
+    const allSelected = customers.length > 0 && customers.every(c => this.selectedCustomerIds.has(c.id));
+    const selectedCount = this.selectedCustomerIds.size;
+
+    const bulkToolbar = `
+      <div class="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 p-3 rounded-2xl border border-emerald-200 flex items-center justify-between gap-2 shadow-xs mb-2">
+        <div class="flex items-center gap-2.5">
+          <input type="checkbox" id="kb-select-all-cust" ${allSelected ? 'checked' : ''} onchange="KhatabookUI.toggleSelectAll(this.checked)" class="w-5 h-5 rounded accent-emerald-700 cursor-pointer"/>
+          <label for="kb-select-all-cust" class="text-xs md:text-sm font-bold text-slate-800 cursor-pointer">
+            सबको चुनें ${selectedCount > 0 ? `(${selectedCount} चुने गए)` : ''}
+          </label>
+        </div>
+        <div class="flex items-center gap-2">
+          ${selectedCount > 0 ? `
+            <button onclick="KhatabookUI.startBatchAiCallForSelected()" class="h-9 px-3.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[16px]">smart_toy</span>
+              <span>📞 चुने हुए (${selectedCount}) को AI कॉल लगाएं</span>
+            </button>
+          ` : `
+            <button onclick="KhatabookUI.selectAllAndCall()" class="h-9 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold text-xs flex items-center gap-1 border border-indigo-200 active:scale-95 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[16px]">phone_forwarded</span>
+              <span>सबको AI कॉल लगाएं</span>
+            </button>
+          `}
+        </div>
+      </div>
+    `;
+
+    container.innerHTML = bulkToolbar + customers.map(c => this.renderCustomerCard(c, shopId, todayStr)).join('');
+  },
+
+  toggleCustomerSelect(customerId, isChecked) {
+    if (isChecked) {
+      this.selectedCustomerIds.add(customerId);
+    } else {
+      this.selectedCustomerIds.delete(customerId);
+    }
+    this.renderCustomerAccounts();
+  },
+
+  toggleSelectAll(isChecked) {
+    const shopId = AppState.currentShopId;
+    const customers = AppState.customers.filter(c => !c.associatedShops || c.associatedShops.includes(shopId));
+    if (isChecked) {
+      customers.forEach(c => this.selectedCustomerIds.add(c.id));
+    } else {
+      this.selectedCustomerIds.clear();
+    }
+    this.renderCustomerAccounts();
+  },
+
+  selectAllAndCall() {
+    this.toggleSelectAll(true);
+    this.startBatchAiCallForSelected();
+  },
+
+  startBatchAiCallForSelected() {
+    const shopId = AppState.currentShopId;
+    const selected = AppState.customers.filter(c => this.selectedCustomerIds.has(c.id));
+    const toCall = selected.map(c => {
+      const due = (c.balancesRupees ? c.balancesRupees[shopId] : (c.balances?.[shopId] ? c.balances[shopId] / 100 : 0)) || 0;
+      return {
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        due,
+        shopId
+      };
+    }).filter(c => c.phone);
+
+    if (toCall.length === 0) {
+      alert('चुने हुए ग्राहकों में कोई वैध फोन नंबर नहीं मिला');
+      return;
+    }
+
+    if (confirm(`क्या आप चुने हुए ${toCall.length} ग्राहकों को बैकग्राउंड में एक-एक करके AI ऑटो-कॉल लगाना चाहते हैं?`)) {
+      this.selectedCustomerIds.clear();
+      this.renderCustomerAccounts();
+      if (window.TelephonyUI && typeof TelephonyUI.startBatchAutoDial === 'function') {
+        TelephonyUI.startBatchAutoDial(toCall, shopId);
+      }
+    }
   },
 
   renderCustomerCard(c, shopId, todayStr) {
@@ -261,6 +342,7 @@ const KhatabookUI = {
 
     const initial = (c.name || 'ग').charAt(0);
     const formattedDue = `₹${Math.abs(rawDue).toLocaleString('en-IN')}`;
+    const isChecked = this.selectedCustomerIds.has(c.id);
 
     // Call Reminder Status Badge
     let callBadge = '';
@@ -288,6 +370,7 @@ const KhatabookUI = {
       <div onclick="KhatabookUI.openCustomerLedger('${c.id}')" class="bg-white rounded-3xl p-4 shadow-sm hover:shadow-md transition-all border border-slate-200 flex flex-col gap-3 cursor-pointer active:scale-[0.99] spring-card">
         <div class="flex items-start justify-between gap-3">
           <div class="flex items-center gap-3 min-w-0">
+            <input type="checkbox" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation(); KhatabookUI.toggleCustomerSelect('${c.id}', this.checked)" class="w-5 h-5 rounded accent-emerald-700 cursor-pointer shrink-0"/>
             <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#003629] to-[#1b4d3e] text-emerald-300 flex items-center justify-center font-bold text-lg shrink-0 shadow-sm">
               ${initial}
             </div>
@@ -320,9 +403,9 @@ const KhatabookUI = {
               <span class="material-symbols-outlined text-[16px] text-emerald-700">chat</span>
               <span>व्हाट्सऐप</span>
             </button>
-            <button onclick="KhatabookUI.triggerCustomerAiCall('${c.id}')" class="h-9 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold text-xs flex items-center gap-1 active:scale-95 transition-all border border-indigo-200">
-              <span class="material-symbols-outlined text-[16px] text-indigo-700">smart_toy</span>
-              <span>AI कॉल</span>
+            <button onclick="KhatabookUI.triggerCustomerAiCall('${c.id}')" class="h-9 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all shadow-xs">
+              <span class="material-symbols-outlined text-[16px]">smart_toy</span>
+              <span>📞 AI कॉल</span>
             </button>
             <button onclick="KhatabookUI.openCustomerLedger('${c.id}')" class="h-9 px-3.5 rounded-xl bg-[#003629] text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all shadow-xs">
               <span>बहीखाता खोलें</span>

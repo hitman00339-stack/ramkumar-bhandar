@@ -746,6 +746,107 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5.1.1 BULK CAMPAIGN CALLING (नई किराना दुकान उद्घाटन आमंत्रण)
+// ----------------------------------------------------
+app.get('/api/campaign/contacts', (req, res) => {
+  try {
+    if (!db.data.campaignContacts) db.data.campaignContacts = [];
+    res.json({ success: true, contacts: db.data.campaignContacts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/campaign/contacts', (req, res) => {
+  try {
+    const { contacts, campaign } = req.body;
+    if (!Array.isArray(contacts) || contacts.length === 0) {
+      return res.status(400).json({ success: false, error: 'कोई संपर्क सूची प्राप्त नहीं हुई' });
+    }
+
+    if (!db.data.campaignContacts) db.data.campaignContacts = [];
+
+    const campaignName = campaign || 'नई किराना दुकान उद्घाटन आमंत्रण';
+    const added = [];
+
+    contacts.forEach(c => {
+      const rawPhone = String(c.phone || '').trim();
+      const cleanDigits = rawPhone.replace(/\D/g, '');
+      if (cleanDigits.length >= 10) {
+        const last10 = cleanDigits.slice(-10);
+        const formatted = `+91 ${last10.slice(0, 5)} ${last10.slice(5)}`;
+        
+        // Check for duplicate in current campaign
+        const existing = db.data.campaignContacts.find(item => item.cleanPhone === last10);
+        if (!existing) {
+          const newContact = {
+            id: 'camp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+            name: (c.name || 'ग्रामवासी / ग्राहक').trim(),
+            phone: formatted,
+            cleanPhone: last10,
+            campaign: campaignName,
+            status: 'pending', // 'pending' | 'calling' | 'connected' | 'failed'
+            durationStr: '--',
+            summary: '',
+            audioUrl: null,
+            addedAt: new Date().toISOString(),
+            lastCallAt: null
+          };
+          db.data.campaignContacts.push(newContact);
+          added.push(newContact);
+        }
+      }
+    });
+
+    db.data.lastMutationTime = new Date().toISOString();
+    db.save();
+
+    res.json({
+      success: true,
+      message: `${added.length} नए संपर्क सफलतापूर्वक जोड़े गए`,
+      addedCount: added.length,
+      totalCount: db.data.campaignContacts.length,
+      contacts: db.data.campaignContacts
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/campaign/update-status', (req, res) => {
+  try {
+    const { id, cleanPhone, status, durationStr, summary, audioUrl } = req.body;
+    if (!db.data.campaignContacts) db.data.campaignContacts = [];
+
+    const contact = db.data.campaignContacts.find(c => c.id === id || (cleanPhone && c.cleanPhone === cleanPhone));
+    if (contact) {
+      if (status) contact.status = status;
+      if (durationStr) contact.durationStr = durationStr;
+      if (summary) contact.summary = summary;
+      if (audioUrl) contact.audioUrl = audioUrl;
+      contact.lastCallAt = new Date().toISOString();
+      db.data.lastMutationTime = new Date().toISOString();
+      db.save();
+    }
+
+    res.json({ success: true, contact });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/campaign/contacts', (req, res) => {
+  try {
+    db.data.campaignContacts = [];
+    db.data.lastMutationTime = new Date().toISOString();
+    db.save();
+    res.json({ success: true, message: 'अभियान संपर्क सूची सफलतापूर्वक साफ़ की गई' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ----------------------------------------------------
 // 5.2 SPRAYER MACHINE RENTAL & QR APIS (कृषि स्प्रेयर मशीन)
 // ----------------------------------------------------
 app.get('/api/sprayers', (req, res) => {

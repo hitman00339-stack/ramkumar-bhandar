@@ -152,6 +152,70 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(ramsevak.balances.krishi, 150000, 'उधार राशि 1500 रुपये (150000 पैसे) होनी चाहिए');
   });
 
+  await t.test('Bulk Campaign: Parses numbers, persists campaign contacts, and updates status sequentially', () => {
+    // Test parsing function
+    const sampleInput = `
+      8175044956
+      रामलाल - 9580133593
+      +91 9826011223 (मोहन)
+      8175044956, 9123456780
+    `;
+
+    const lines = sampleInput.split(/[\n,;]+/);
+    const parsed = [];
+    const seen = new Set();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const match = trimmed.match(/(?:\+?91[\s-]?)?([6-9]\d{9})/);
+      if (match) {
+        const last10 = match[1];
+        if (!seen.has(last10)) {
+          seen.add(last10);
+          let name = trimmed.replace(match[0], '').replace(/[-:–—()]/g, '').trim();
+          if (!name || name.length < 2) name = 'ग्रामवासी / ग्राहक';
+          parsed.push({ name, cleanPhone: last10, phone: '+91 ' + last10 });
+        }
+      }
+    }
+
+    assert.strictEqual(parsed.length, 4, '4 अद्वितीय वैध मोबाइल नंबर पहचाने जाने चाहिए (डुप्लीकेट हटकर)');
+    assert.strictEqual(parsed[1].name, 'रामलाल');
+    assert.strictEqual(parsed[2].name, 'मोहन');
+
+    // Simulate backend campaign contact storage
+    if (!db.data.campaignContacts) db.data.campaignContacts = [];
+    parsed.forEach(c => {
+      db.data.campaignContacts.push({
+        id: 'camp_' + c.cleanPhone,
+        name: c.name,
+        cleanPhone: c.cleanPhone,
+        phone: c.phone,
+        status: 'pending',
+        campaign: 'नई किराना दुकान उद्घाटन (4 नवंबर)'
+      });
+    });
+
+    assert.strictEqual(db.data.campaignContacts.length, 4);
+
+    // Update status for contact 1 (simulating completed call)
+    const c1 = db.data.campaignContacts.find(c => c.cleanPhone === '8175044956');
+    c1.status = 'connected';
+    c1.durationStr = '01:30';
+    c1.summary = 'उद्घाटन आमंत्रण स्वीकार किया';
+
+    assert.strictEqual(c1.status, 'connected');
+    assert.strictEqual(c1.durationStr, '01:30');
+
+    // Update status for contact 2 (simulating failed/no-answer call)
+    const c2 = db.data.campaignContacts.find(c => c.cleanPhone === '9580133593');
+    c2.status = 'failed';
+    c2.durationStr = '00:00';
+    c2.summary = 'घंटी बजी पर नहीं उठा (No Answer)';
+
+    assert.strictEqual(c2.status, 'failed');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

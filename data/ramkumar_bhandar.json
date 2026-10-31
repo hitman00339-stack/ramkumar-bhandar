@@ -64,5 +64,7 @@
       "currentRental": null
     }
   ],
-  "sprayerHistory": []
+  "sprayerHistory": [],
+  "campaignContacts": [],
+  "lastMutationTime": "2026-10-31T13:32:28.595Z"
 }

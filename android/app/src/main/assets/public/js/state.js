@@ -43,6 +43,7 @@ const AppState = {
   suppliers: [],
   callLogs: [],
   activeAiInstruction: '',
+  lastMutationTime: null,
   
   // Offline sync queue
   syncQueue: [],
@@ -51,6 +52,7 @@ const AppState = {
   init() {
     this.loadFromStorage();
     this.setupNetworkListeners();
+    this.startAutoSyncPoller();
     this.fetchInitialData();
   },
 
@@ -99,10 +101,24 @@ const AppState = {
     }
   },
 
+  async fetchWithTimeout(url, options = {}, timeoutMs = 4500) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  },
+
   setupNetworkListeners() {
     window.addEventListener('online', () => {
       this.isOnline = true;
       this.showToast('🟢 इंटरनेट जुड़ गया - डेटा सिंक हो रहा है...');
+      this.updateNetworkBadge();
       this.processSyncQueue();
       this.fetchInitialData();
     });
@@ -110,8 +126,70 @@ const AppState = {
     window.addEventListener('offline', () => {
       this.isOnline = false;
       this.showToast('🔴 ऑफ़लाइन मोड - डेटा आपके फोन में सुरक्षित रहेगा');
+      this.updateNetworkBadge();
       this.notify();
     });
+
+    // Auto-drain queue periodically when network recovers
+    setInterval(() => {
+      if (navigator.onLine && this.syncQueue.length > 0) {
+        this.processSyncQueue();
+      }
+      this.updateNetworkBadge();
+    }, 15000);
+  },
+
+  startAutoSyncPoller() {
+    const checkSync = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const res = await this.fetchWithTimeout('/api/sync/version', {}, 3500);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.lastMutationTime) {
+            if (this.lastMutationTime && this.lastMutationTime !== data.lastMutationTime) {
+              console.log('[Multi-Device Sync] Data mutation detected on remote phone/server. Synchronizing...');
+              await this.fetchInitialData();
+              this.showToast('🔄 अन्य डिवाइस से नया डेटा स्वतः सिंक हुआ!');
+            }
+            this.lastMutationTime = data.lastMutationTime;
+          }
+        }
+      } catch (e) {
+        // Silent fail on weak connectivity
+      }
+    };
+
+    // Auto check every 6 seconds for multi-device synchronization
+    setInterval(checkSync, 6000);
+
+    // Sync instantly when user focuses or returns to tab/app
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        checkSync();
+      }
+    });
+    window.addEventListener('focus', checkSync);
+  },
+
+  updateNetworkBadge() {
+    const icon = document.getElementById('header-net-icon');
+    const text = document.getElementById('header-net-text');
+    if (!icon || !text) return;
+
+    if (!navigator.onLine) {
+      icon.innerText = 'cloud_off';
+      icon.className = 'material-symbols-outlined text-[14px] text-rose-500';
+      text.innerText = '🔴 ऑफ़लाइन (सुरक्षित)';
+    } else if (this.syncQueue.length > 0) {
+      icon.innerText = 'sync';
+      icon.className = 'material-symbols-outlined text-[14px] text-amber-500 animate-spin';
+      text.innerText = `🔄 ${this.syncQueue.length} सिंक कतार`;
+    } else {
+      icon.innerText = 'cloud_done';
+      icon.className = 'material-symbols-outlined text-[14px] text-emerald-600';
+      text.innerText = 'सुरक्षित डेटा';
+    }
   },
 
   async fetchInitialData() {
@@ -299,17 +377,42 @@ const AppState = {
 
   // RECORD TRANSACTION WITH ATOMIC PERSISTENCE & IDEMPOTENCY
   async submitTransaction(payload) {
-    // Generate stable idempotency key if not present
     if (!payload.idempotencyKey) {
       payload.idempotencyKey = 'cli_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     }
 
+    // Immediate local optimistic update
+    const amt = parseFloat(payload.amount) || 0;
+    const localTx = {
+      id: 'txn_' + Date.now(),
+      shopId: payload.shopId || this.currentShopId,
+      type: payload.type,
+      personName: payload.personName,
+      phone: payload.phone,
+      amount: amt,
+      description: payload.description || '',
+      timestamp: new Date().toISOString(),
+      paymentMode: payload.paymentMode || 'cash'
+    };
+    this.transactions.unshift(localTx);
+
+    // Update customer local balance optimistically
+    if (payload.personName) {
+      const cust = this.customers.find(c => c.name === payload.personName || (payload.phone && c.phone === payload.phone));
+      if (cust) {
+        if (payload.type === 'customer_credit') cust.currentBalance = (cust.currentBalance || 0) + amt;
+        if (payload.type === 'customer_payment') cust.currentBalance = Math.max(0, (cust.currentBalance || 0) - amt);
+      }
+    }
+    this.saveToStorage();
+    this.notify();
+
     try {
-      const res = await fetch('/api/transactions', {
+      const res = await this.fetchWithTimeout('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
+      }, 4000);
 
       const result = await res.json();
       if (!res.ok) {
@@ -317,21 +420,19 @@ const AppState = {
       }
 
       this.showToast(result.message || '✓ हिसाब सफलतापूर्वक जुड़ गया');
-      await this.fetchInitialData();
+      this.fetchInitialData();
       return result;
     } catch (err) {
-      if (!this.isOnline) {
-        // Queue for offline processing
-        this.syncQueue.push({
-          id: 'sync_' + Date.now(),
-          action: 'CREATE_TRANSACTION',
-          payload
-        });
-        this.showToast('⚠️ ऑफ़लाइन: लेन-देन फोन में सुरक्षित दर्ज हुआ (सिंक कतार में)');
-        this.notify();
-        return { success: true, offline: true };
-      }
-      throw err;
+      // Offline fallback: Queue for background sync
+      this.syncQueue.push({
+        id: 'sync_' + Date.now(),
+        action: 'CREATE_TRANSACTION',
+        payload
+      });
+      this.saveToStorage();
+      this.showToast('⚠️ ऑफ़लाइन/धीमा इंटरनेट: हिसाब फोन में सुरक्षित दर्ज हुआ');
+      this.updateNetworkBadge();
+      return { success: true, offline: true, transaction: localTx };
     }
   },
 
@@ -339,16 +440,17 @@ const AppState = {
   async processSyncQueue() {
     if (this.syncQueue.length === 0) return;
     try {
-      const res = await fetch('/api/sync', {
+      const res = await this.fetchWithTimeout('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ queue: this.syncQueue })
-      });
+      }, 8000);
       if (res.ok) {
         this.syncQueue = [];
         this.saveToStorage();
         this.showToast('✓ सभी ऑफ़लाइन लेन-देन सफलतापूर्वक सिंक हो गए!');
         this.fetchInitialData();
+        this.updateNetworkBadge();
       }
     } catch (e) {
       console.warn('Sync queue flush failed:', e);
@@ -363,17 +465,52 @@ const AppState = {
       throw new Error('AI कॉल और व्हाट्सऐप के लिए 10 अंकों का मोबाइल नंबर अनिवार्य है');
     }
 
-    const res = await fetch('/api/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, phone: cleanPhone, village, role, shopId, callReminderDate })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'ग्राहक जोड़ने में विफल');
+    const localCust = {
+      id: 'cust_' + Date.now(),
+      name: name.trim(),
+      phone: cleanPhone,
+      village: village || '',
+      role,
+      associatedShops: [shopId || this.currentShopId],
+      currentBalance: 0,
+      callReminderDate: callReminderDate || '',
+      createdAt: new Date().toISOString()
+    };
 
-    this.showToast(data.message || '✓ ग्राहक खाता बनाया गया');
-    await this.fetchCustomers();
-    return data.customer;
+    // Immediate local optimistic add
+    this.customers.unshift(localCust);
+    this.saveToStorage();
+    this.notify();
+
+    try {
+      const res = await this.fetchWithTimeout('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone: cleanPhone, village, role, shopId, callReminderDate })
+      }, 4000);
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ग्राहक जोड़ने में विफल');
+
+      this.showToast(data.message || '✓ ग्राहक खाता बनाया गया');
+      if (data.customer) {
+        const idx = this.customers.findIndex(c => c.id === localCust.id);
+        if (idx !== -1) this.customers[idx] = data.customer;
+        this.saveToStorage();
+      }
+      return data.customer || localCust;
+    } catch (err) {
+      // Offline fallback
+      this.syncQueue.push({
+        id: 'sync_' + Date.now(),
+        action: 'CREATE_CUSTOMER',
+        payload: { name, phone: cleanPhone, village, role, shopId, callReminderDate }
+      });
+      this.saveToStorage();
+      this.showToast('⚠️ ऑफ़लाइन: ग्राहक खाता फोन में सुरक्षित बना');
+      this.updateNetworkBadge();
+      return localCust;
+    }
   },
 
   async setCustomerCallReminder(customerId, callReminderDate, notes = '') {

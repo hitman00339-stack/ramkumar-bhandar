@@ -725,6 +725,12 @@
           </div>
 
           <div class="flex items-center gap-2 flex-wrap">
+            <!-- Bulk Numbers Adder Button (New General Store Inauguration) -->
+            <button onclick="TelephonyUI.openBulkNumbersModal()" class="h-9 px-3.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer" title="नई किराना दुकान उद्घाटन हेतु बल्क नंबर जोड़ें">
+              <span class="material-symbols-outlined text-[17px]">celebration</span>
+              <span>🎉 बल्क नंबर जोड़ें (उद्घाटन आमंत्रण)</span>
+            </button>
+
             <!-- CSV Export & WhatsApp Report Buttons -->
             <button onclick="TelephonyUI.exportToCsv()" class="h-9 px-3 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer" title="स्प्रेडशीट CSV डाउनलोड करें">
               <span class="material-symbols-outlined text-[17px] text-emerald-700">download</span>
@@ -809,11 +815,15 @@
 
         <!-- SEARCH & CATEGORY FILTER TABS -->
         <div class="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5">
-          <!-- 5 Category Tabs with smooth horizontal scroll -->
+          <!-- Category Tabs with smooth horizontal scroll -->
           <div class="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold flex-1 overflow-x-auto no-scrollbar py-1">
             <button onclick="TelephonyUI.switchCallTab('all')" id="tab-btn-all" class="shrink-0 h-10 px-3 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer">
               <span>📋 सभी डायल किए</span>
               <span id="badge-count-all" class="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px]">0</span>
+            </button>
+            <button onclick="TelephonyUI.switchCallTab('inauguration')" id="tab-btn-inauguration" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+              <span>🎈 उद्घाटन आमंत्रण</span>
+              <span id="badge-count-inauguration" class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px]">0</span>
             </button>
             <button onclick="TelephonyUI.switchCallTab('connected')" id="tab-btn-connected" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
               <span>✅ बात हुई</span>
@@ -1804,6 +1814,67 @@
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: BULK NUMBERS & INAUGURATION CALLING CAMPAIGN -->
+  <!-- ========================================== -->
+  <div class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end md:items-center justify-center p-0 md:p-4" id="modal-bulk-numbers">
+    <div class="w-full max-w-lg bg-white rounded-t-3xl md:rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 text-white flex items-center justify-center shadow-xs">
+            <span class="material-symbols-outlined text-[22px]">celebration</span>
+          </div>
+          <div>
+            <h3 class="font-bold text-slate-900 text-base">🎉 नई किराना दुकान उद्घाटन — बल्क कॉलिंग</h3>
+            <p class="text-xs text-slate-500">एक साथ कई नंबर जोड़ें और AI एजेंट से एक-एक करके कॉल लगाएं</p>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeBulkNumbersModal()" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <div class="flex flex-col gap-3">
+        <!-- Campaign Selector -->
+        <div>
+          <label class="text-xs font-bold text-slate-700 block mb-1">कॉल अभियान का उद्देश्य:</label>
+          <select id="bulk-campaign-select" onchange="TelephonyUI.handleCampaignPresetChange(this.value)" class="w-full h-11 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs md:text-sm font-bold text-slate-900 outline-none">
+            <option value="inauguration">🎈 नई किराना एवं जनरल स्टोर दुकान का भव्य शुभारंभ / उद्घाटन (4 नवंबर)</option>
+            <option value="krishi_stock">🌾 खाद, यूरिया व बीज नया स्टॉक आगमन सूचना</option>
+            <option value="udhar_reminder">💳 उधार खाता बकाया भुगतान तकादा</option>
+          </select>
+        </div>
+
+        <!-- Textarea for Numbers -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs font-bold text-slate-700">मोबाइल नंबर यहाँ पेस्ट करें या लिखें:</label>
+            <span id="bulk-numbers-counter" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">0 नंबर मिले</span>
+          </div>
+          <textarea id="bulk-numbers-input" oninput="TelephonyUI.parseBulkNumbersInput(this.value)" rows="5" class="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-xs font-mono font-medium text-slate-900 outline-none focus:border-amber-600 focus:bg-white transition-all" placeholder="उदाहरण:&#10;8175044956&#10;9580133593&#10;रामलाल - 9826011223&#10;मोहन 9123456780, 9876543210"></textarea>
+          <p class="text-[11px] text-slate-500 mt-1">💡 आप व्हाट्सऐप, एसएमएस या एक्सेल से सीधे कॉपी करके यहाँ पेस्ट कर सकते हैं। सिस्टम स्वतः 10 अंकों के नंबर पहचान लेगा।</p>
+        </div>
+
+        <!-- AI Voice Speech Script -->
+        <div>
+          <label class="text-xs font-bold text-slate-700 block mb-1">AI एजेंट का उद्घाटन आमंत्रण संदेश (हिंदी):</label>
+          <textarea id="bulk-prompt-input" rows="3" class="w-full p-3 rounded-xl bg-amber-50/50 border border-amber-200 text-xs text-amber-950 font-medium outline-none focus:border-amber-600">नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी की नई शाखा के भव्य उद्घाटन समारोह में आप सपरिवार सादर आमंत्रित हैं। 4 नवंबर को पधारकर हमारा उत्साहवर्धन करें। धन्यवाद!</textarea>
+        </div>
+
+        <!-- Buttons -->
+        <div class="grid grid-cols-2 gap-2 pt-2">
+          <button type="button" onclick="TelephonyUI.closeBulkNumbersModal()" class="h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
+            रद्द करें
+          </button>
+          <button type="button" onclick="TelephonyUI.saveBulkNumbersAndStart()" id="btn-save-bulk-numbers" class="h-12 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer">
+            <span class="material-symbols-outlined text-[18px]">phone_in_talk</span>
+            <span>✓ सूची जोड़ें और कॉल लगाएं</span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
