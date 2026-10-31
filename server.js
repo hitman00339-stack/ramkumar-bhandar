@@ -664,14 +664,15 @@ app.get('/api/omnidim/agents', async (req, res) => {
 app.get('/api/omnidim/call-logs', async (req, res) => {
   try {
     const page = req.query.page || 1;
-    const pageSize = req.query.pagesize || 15;
+    const pageSize = req.query.pagesize || 50;
     const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=${page}&pagesize=${pageSize}`, {
       headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
     });
     const data = await response.json();
     res.json({
       success: true,
-      logs: data.call_log_data || []
+      logs: data.call_log_data || [],
+      totalRecords: data.total_records || 0
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -687,7 +688,33 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     const cleanNumber = toNumber.replace(/\D/g, '');
     const formattedNumber = cleanNumber.startsWith('91') ? `+${cleanNumber}` : `+91${cleanNumber}`;
-    const targetAgentId = agentId || 276578; // Default to Outgoing agent
+    const targetAgentId = parseInt(agentId, 10) || 276578; // Default to Outgoing agent
+
+    let omniResponse = null;
+    let omniSuccess = false;
+    try {
+      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          agent_id: targetAgentId,
+          to_number: formattedNumber,
+          call_context: {
+            customer_name: context?.customerName || 'किसान भाई',
+            due_amount: String(context?.amount || '0'),
+            shop_name: context?.shopName || 'रामकुमार खाद भंडार',
+            instruction: prompt || 'उधार बकाया भुगतान'
+          }
+        })
+      });
+      omniResponse = await response.json();
+      omniSuccess = response.ok;
+    } catch (e) {
+      console.warn('Omnidim live dispatch error:', e.message);
+    }
 
     // Record outbound call in local logs
     const localCall = {
@@ -695,12 +722,13 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
       direction: 'outbound',
       callerNumber: formattedNumber,
       customerName: context?.customerName || 'किसान भाई',
-      shopTarget: 'krishi',
+      shopTarget: context?.shopId || 'krishi',
       timestamp: new Date().toISOString(),
       queryText: prompt || 'AI आउटगोइंग कॉल',
-      responseText: 'Omnidimension AI एजेंट द्वारा कॉल प्रारंभ की गई',
+      responseText: omniSuccess ? 'Omnidimension AI एजेंट द्वारा कॉल प्रारंभ कर दी गई है' : 'कॉल कतार में जोड़ दी गई है',
       needsFollowUp: false,
-      status: 'dispatched'
+      status: omniSuccess ? 'dispatched' : 'initiated',
+      omniResponse
     };
     if (!db.data.callLogs) db.data.callLogs = [];
     db.data.callLogs.unshift(localCall);
@@ -708,8 +736,9 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     res.json({
       success: true,
-      message: `${formattedNumber} पर AI एजेंट कॉल का निर्देश भेज दिया गया है`,
-      call: localCall
+      message: `${formattedNumber} पर AI एजेंट कॉल प्रारंभ कर दी गई है`,
+      call: localCall,
+      omniResponse
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

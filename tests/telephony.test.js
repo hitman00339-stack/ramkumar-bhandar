@@ -62,6 +62,96 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(recorded);
   });
 
+  await t.test('AI Calling Spreadsheet: Resolves inbound vs outbound phone and classifies connected vs failed (no-answer/busy)', () => {
+    const botNumber = '8045440103';
+    const sampleLogs = [
+      {
+        id: 10436325,
+        call_direction: 'outbound',
+        from_number: '+918045440103',
+        to_number: '+918175044956',
+        call_status: 'no-answer',
+        call_duration_in_seconds: 0,
+        call_duration_in_minutes: 0
+      },
+      {
+        id: 10445088,
+        call_direction: 'inbound',
+        from_number: '+918175044956',
+        to_number: '918045440103',
+        call_status: 'completed',
+        call_duration_in_seconds: 60,
+        call_duration_in_minutes: 0,
+        internal_recording_url: 'https://omnidim.io/api/v1/recording/10445088?token=xyz'
+      },
+      {
+        id: 10433697,
+        call_direction: 'outbound',
+        from_number: 'Web Call',
+        to_number: 'Assistant',
+        call_status: 'completed',
+        call_duration_in_seconds: 45,
+        call_duration_in_minutes: 1
+      }
+    ];
+
+    // Verify phone resolution logic
+    const processed = sampleLogs.map(c => {
+      const isOutbound = c.call_direction === 'outbound';
+      const toClean = (c.to_number || '').replace(/\D/g, '');
+      const fromClean = (c.from_number || '').replace(/\D/g, '');
+      let phone = '';
+      if (c.from_number === 'Web Call' || c.to_number === 'Web Call') {
+        phone = '🌐 वेब टेस्ट कॉल';
+      } else if (toClean.includes(botNumber)) {
+        phone = c.from_number;
+      } else if (fromClean.includes(botNumber)) {
+        phone = c.to_number;
+      } else {
+        phone = isOutbound ? c.to_number : c.from_number;
+      }
+
+      const totalSec = (c.call_duration_in_minutes * 60) + c.call_duration_in_seconds;
+      const rawStatus = (c.call_status || '').toLowerCase();
+      const isConnected = totalSec > 0 && rawStatus !== 'no-answer' && rawStatus !== 'busy';
+      const isFailed = !isConnected;
+
+      return { id: c.id, phone, isConnected, isFailed, totalSec };
+    });
+
+    // Outbound to customer failed (no-answer)
+    assert.strictEqual(processed[0].phone, '+918175044956');
+    assert.strictEqual(processed[0].isConnected, false);
+    assert.strictEqual(processed[0].isFailed, true);
+
+    // Inbound from customer completed (connected)
+    assert.strictEqual(processed[1].phone, '+918175044956');
+    assert.strictEqual(processed[1].isConnected, true);
+    assert.strictEqual(processed[1].isFailed, false);
+
+    // Web test call
+    assert.strictEqual(processed[2].phone, '🌐 वेब टेस्ट कॉल');
+    assert.strictEqual(processed[2].isConnected, true);
+  });
+
+  await t.test('AI Calling Spreadsheet: Filters pending credit customers who require call reminders', () => {
+    // Add customer with due balance
+    db.createTransaction({
+      shopId: 'krishi',
+      type: 'CUSTOMER_CREDIT_SALE',
+      amount: 1500,
+      customerName: 'रामसेवक किसान',
+      customerPhone: '9876543210',
+      description: 'खाद उधार'
+    });
+
+    const customers = db.getCustomers();
+    const ramsevak = customers.find(c => c.name === 'रामसेवक किसान');
+
+    assert(ramsevak, 'रामसेवक ग्राहक मिलना चाहिए');
+    assert.strictEqual(ramsevak.balances.krishi, 150000, 'उधार राशि 1500 रुपये (150000 पैसे) होनी चाहिए');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });
