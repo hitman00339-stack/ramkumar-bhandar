@@ -40,7 +40,20 @@ test('Backup, Synchronization & Data Reliability Tests', async (t) => {
 
   await t.test('TEST 10: One customer transactions in the two shops remain separate', () => {
     // Customer Mohan Singh exists in both shops
-    const customer = db.getCustomer('cust_2');
+    let customer = db.getCustomer('cust_2');
+    if (!customer) {
+      customer = {
+        id: 'cust_2',
+        name: 'मोहन सिंह',
+        role: 'किसान',
+        phone: '9876543212',
+        village: 'रामपुर',
+        associatedShops: ['krishi', 'kirana'],
+        balances: { krishi: 0, kirana: 0 },
+        createdAt: new Date().toISOString()
+      };
+      db.data.customers.push(customer);
+    }
     assert(customer);
 
     const initialKrishiBalance = customer.balances.krishi || 0;

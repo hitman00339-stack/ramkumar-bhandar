@@ -448,6 +448,24 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(openStart, 500);
     assert.strictEqual(openEnd, 999);
     assert.strictEqual(openChunkLength, 500);
+
+    // Test Case D: Over-sized range request (bytes=0-10000000) clamped to totalSize - 1 (Prevents mid-playback pause!)
+    const overRangeHeader = 'bytes=0-10000000';
+    const overMatch = overRangeHeader.match(/bytes=(\d*)-(\d*)/);
+    const overStart = parseInt(overMatch[1], 10);
+    const overEnd = Math.min(totalSize - 1, parseInt(overMatch[2], 10));
+    assert.strictEqual(overStart, 0);
+    assert.strictEqual(overEnd, 999);
+    assert.strictEqual((overEnd - overStart) + 1, 1000);
+
+    // Test Case E: Suffix range request (bytes=-200)
+    const suffixHeader = 'bytes=-200';
+    const suffixMatch = suffixHeader.match(/bytes=(\d*)-(\d*)/);
+    const suffixStart = Math.max(0, totalSize - parseInt(suffixMatch[2], 10));
+    const suffixEnd = totalSize - 1;
+    assert.strictEqual(suffixStart, 800);
+    assert.strictEqual(suffixEnd, 999);
+    assert.strictEqual((suffixEnd - suffixStart) + 1, 200);
   });
 
   await t.test('Sequential Calling Invariant: Exactly one active call placed at a time, waits for termination before next call', () => {

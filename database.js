@@ -113,140 +113,8 @@ class Database {
           syncError: null
         }
       },
-      customers: [
-        {
-          id: 'cust_1',
-          name: 'रामलाल पटेल',
-          role: 'किसान',
-          phone: '9876543210',
-          village: 'खेत न. 4',
-          associatedShops: ['krishi'],
-          // Per-shop balance in Paise: positive = customer owes shop (लेना बाकी)
-          balances: {
-            krishi: toPaise(8400),
-            kirana: toPaise(0)
-          },
-          lastPaymentDate: '2026-10-24T11:30:00.000Z',
-          createdAt: now
-        },
-        {
-          id: 'cust_2',
-          name: 'मोहन सिंह',
-          role: 'किसान',
-          phone: '9876543212',
-          village: 'बड़ा चौराहा',
-          associatedShops: ['krishi', 'kirana'],
-          balances: {
-            krishi: toPaise(0),
-            kirana: toPaise(450)
-          },
-          lastPaymentDate: '2026-10-24T10:15:00.000Z',
-          createdAt: now
-        },
-        {
-          id: 'cust_3',
-          name: 'सीमा देवी',
-          role: 'ग्राहक',
-          phone: '9876543213',
-          village: 'वार्ड 2',
-          associatedShops: ['krishi', 'kirana'],
-          balances: {
-            krishi: toPaise(650),
-            kirana: toPaise(1200)
-          },
-          lastPaymentDate: '2026-10-22T14:20:00.000Z',
-          createdAt: now
-        },
-        {
-          id: 'cust_4',
-          name: 'दिनेश शर्मा',
-          role: 'ग्राहक',
-          phone: '9876543211',
-          village: 'पुरानी बस्ती',
-          associatedShops: ['krishi', 'kirana'],
-          balances: {
-            krishi: toPaise(1200),
-            kirana: toPaise(0)
-          },
-          lastPaymentDate: '2026-10-21T09:00:00.000Z',
-          createdAt: now
-        },
-        {
-          id: 'cust_5',
-          name: 'रामेश्वर पटेल',
-          role: 'किसान',
-          phone: '9826012345',
-          village: 'खेत न. 4',
-          associatedShops: ['krishi'],
-          balances: {
-            krishi: toPaise(780),
-            kirana: toPaise(0)
-          },
-          lastPaymentDate: null,
-          createdAt: now
-        },
-        {
-          id: 'cust_6',
-          name: 'बलवीर चौधरी',
-          role: 'किसान',
-          phone: '9826098765',
-          village: 'रामपुर',
-          associatedShops: ['krishi'],
-          balances: {
-            krishi: toPaise(4200),
-            kirana: toPaise(0)
-          },
-          lastPaymentDate: '2026-10-24T10:45:00.000Z',
-          createdAt: now
-        }
-      ],
-      suppliers: [
-        {
-          id: 'sup_1',
-          name: 'इफ्को खाद एजेंसी',
-          phone: '9826011111',
-          associatedShops: ['krishi'],
-          // Positive = shop owes supplier (देना बाकी)
-          balances: {
-            krishi: toPaise(42000),
-            kirana: toPaise(0)
-          },
-          createdAt: now
-        },
-        {
-          id: 'sup_2',
-          name: 'बायर इंडिया क्रॉप साइंस',
-          phone: '9826022222',
-          associatedShops: ['krishi'],
-          balances: {
-            krishi: toPaise(15000),
-            kirana: toPaise(0)
-          },
-          createdAt: now
-        },
-        {
-          id: 'sup_3',
-          name: 'धानुका एग्रीटेक',
-          phone: '9826033333',
-          associatedShops: ['krishi'],
-          balances: {
-            krishi: toPaise(18000),
-            kirana: toPaise(0)
-          },
-          createdAt: now
-        },
-        {
-          id: 'sup_4',
-          name: 'अडानी विल्मर होलसेल (किराना)',
-          phone: '9826044444',
-          associatedShops: ['kirana'],
-          balances: {
-            krishi: toPaise(0),
-            kirana: toPaise(28000)
-          },
-          createdAt: now
-        }
-      ],
+      customers: [],
+      suppliers: [],
       products: [
         // Agricultural shop items
         {
@@ -423,212 +291,17 @@ class Database {
           ]
         }
       ],
-      transactions: [
-        {
-          id: 'txn_1',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_1',
-          type: 'CUSTOMER_CREDIT_SALE', // ग्राहक उधार दिया
-          amount: toPaise(2700),
-          customerId: 'cust_1',
-          customerName: 'रामलाल पटेल',
-          role: 'किसान',
-          phone: '9876543210',
-          productId: 'prod_k_1',
-          productName: '2 बोरी डीएपी खाद (IFFCO)',
-          quantity: 2,
-          description: '2 बोरी डीएपी खाद (IFFCO) उधार दी',
-          date: '2026-10-24T11:30:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(8400),
-          createdAt: now
-        },
-        {
-          id: 'txn_2',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_2',
-          type: 'CUSTOMER_PAYMENT', // ग्राहक जमा मिला
-          amount: toPaise(1500),
-          customerId: 'cust_2',
-          customerName: 'मोहन सिंह',
-          role: 'किसान',
-          phone: '9876543212',
-          paymentMethod: 'CASH',
-          description: 'नकद गल्ला जमा की - पुरानी उधारी चुकता',
-          date: '2026-10-24T10:15:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(0),
-          createdAt: now
-        },
-        {
-          id: 'txn_3',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_3',
-          type: 'SUPPLIER_CREDIT_PURCHASE', // सप्लायर उधार खरीद
-          amount: toPaise(25000),
-          supplierId: 'sup_1',
-          supplierName: 'इफ्को खाद एजेंसी',
-          productId: 'prod_k_2',
-          productName: 'यूरिया',
-          quantity: 50,
-          description: '50 बोरी यूरिया माल आया (बिल #419)',
-          date: '2026-10-23T16:45:00.000Z',
-          source: 'manual',
-          payableAfter: toPaise(42000),
-          createdAt: now
-        },
-        {
-          id: 'txn_4',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_4',
-          type: 'CUSTOMER_CREDIT_SALE',
-          amount: toPaise(650),
-          customerId: 'cust_3',
-          customerName: 'सीमा देवी',
-          role: 'ग्राहक',
-          phone: '9876543213',
-          productId: 'prod_k_3',
-          productName: 'सरसों बीज पैकेट (1 कि.ग्रा.)',
-          quantity: 1,
-          description: 'सरसों बीज पैकेट (1 कि.ग्रा.)',
-          date: '2026-10-22T14:20:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(650),
-          createdAt: now
-        },
-        {
-          id: 'txn_5',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_5',
-          type: 'CUSTOMER_PAYMENT',
-          amount: toPaise(3000),
-          customerId: 'cust_4',
-          customerName: 'दिनेश शर्मा',
-          role: 'ग्राहक',
-          phone: '9876543211',
-          paymentMethod: 'UPI',
-          description: 'UPI से प्राप्त ऑनलाइन भुगतान',
-          date: '2026-10-21T09:00:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(1200),
-          createdAt: now
-        },
-        {
-          id: 'txn_6',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_6',
-          type: 'CUSTOMER_CREDIT_SALE',
-          amount: toPaise(780),
-          customerId: 'cust_5',
-          customerName: 'रामेश्वर पटेल (खेत न. 4)',
-          role: 'किसान',
-          phone: '9826012345',
-          description: '2 बोरी यूरिया + 1 जिंक',
-          date: '2026-10-24T11:20:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(780),
-          createdAt: now
-        },
-        {
-          id: 'txn_7',
-          shopId: 'krishi',
-          idempotencyKey: 'seed_txn_7',
-          type: 'CUSTOMER_PAYMENT',
-          amount: toPaise(3500),
-          customerId: 'cust_6',
-          customerName: 'बलवीर चौधरी',
-          role: 'किसान',
-          phone: '9826098765',
-          paymentMethod: 'CASH',
-          description: 'पुरानी उधारी का भुगतान',
-          date: '2026-10-24T10:45:00.000Z',
-          source: 'manual',
-          balanceAfter: toPaise(4200),
-          createdAt: now
-        },
-        {
-          id: 'txn_8',
-          shopId: 'kirana',
-          idempotencyKey: 'seed_txn_8',
-          type: 'CASH_SALE', // नकद बिक्री
-          amount: toPaise(780),
-          customerName: 'महेश किराना ग्राहक',
-          productId: 'prod_g_4',
-          productName: 'फॉर्च्यून 5 लीटर तेल टीन',
-          quantity: 1,
-          description: 'फॉर्च्यून 5 लीटर तेल टीन नकद बिका',
-          date: '2026-10-24T10:20:00.000Z',
-          source: 'manual',
-          createdAt: now
-        }
-      ],
+      transactions: [],
+      contactsBook: [],
+      campaignContacts: [],
       aiPhone: {
         assistanceNumber: '+91 98260 78210',
-        activeInstruction: 'यूरिया का नया ट्रक कल सुबह 9 बजे पहुँचेगा। किसान भाई आधार कार्ड साथ लाएँ।',
+        activeInstruction: '',
         lastUpdatedInstruction: now,
-        inquiryTopics: [
-          { topic: 'खाद उपलब्धता', count: 8 },
-          { topic: 'दुकान खुलने का समय', count: 6 },
-          { topic: 'दवाई के दाम', count: 4 }
-        ],
-        callLogs: [
-          {
-            id: 'call_1',
-            shopId: 'krishi',
-            customerName: 'राधेश्याम पाटीदार',
-            role: 'किसान',
-            phone: '+91 98260 00000',
-            date: 'आज, दोपहर 01:15',
-            timestamp: '2026-10-24T13:15:00.000Z',
-            isUrgent: true,
-            statusLabel: 'वापस फोन करें (जरूरी)',
-            transcriptUser: 'यूरिया और डीएपी खाद अभी दुकान पर उपलब्ध है क्या?',
-            transcriptAi: 'हाँ, दुकान खुली है और डीएपी उपलब्ध है। रामकुमार जी से बात कराऊँ?',
-            audioDuration: '0:48 मिनट',
-            hasAudio: true
-          },
-          {
-            id: 'call_2',
-            shopId: 'krishi',
-            customerName: 'अनजान ग्राहक',
-            role: 'ग्राहक',
-            phone: '+91 94258 71230',
-            date: 'आज, सुबह 11:40',
-            timestamp: '2026-10-24T11:40:00.000Z',
-            isUrgent: false,
-            statusLabel: 'सफल बात',
-            transcriptUser: 'दुकान कितने बजे तक खुली रहेगी?',
-            transcriptAi: 'रामकुमार भंडार अभी खुला है और शाम 8 बजे तक खुला रहेगा।',
-            audioDuration: '0:25 मिनट',
-            hasAudio: true
-          },
-          {
-            id: 'call_3',
-            shopId: 'kirana',
-            customerName: 'महेश किराना ग्राहक',
-            role: 'ग्राहक',
-            phone: '+91 98270 44129',
-            date: 'आज, सुबह 10:20',
-            timestamp: '2026-10-24T10:20:00.000Z',
-            isUrgent: false,
-            statusLabel: 'सफल बात',
-            transcriptUser: 'सरसों का तेल 5 लीटर वाला टीन है क्या?',
-            transcriptAi: 'किराना दुकान खुली है, तेल का स्टॉक उपलब्ध है।',
-            audioDuration: '0:32 मिनट',
-            hasAudio: true
-          }
-        ]
+        inquiryTopics: [],
+        callLogs: []
       },
-      idempotencyKeys: {
-        seed_txn_1: 'txn_1',
-        seed_txn_2: 'txn_2',
-        seed_txn_3: 'txn_3',
-        seed_txn_4: 'txn_4',
-        seed_txn_5: 'txn_5',
-        seed_txn_6: 'txn_6',
-        seed_txn_7: 'txn_7',
-        seed_txn_8: 'txn_8'
-      }
+      idempotencyKeys: {}
     };
   }
 
@@ -1532,18 +1205,41 @@ class Database {
     transcript = '',
     audioUrl = null,
     campaign = null,
-    notes = null
+    notes = null,
+    onlyIfExisting = false
   }) {
     if (!this.data.contactsBook) this.data.contactsBook = [];
     const clean = (cleanPhone || phone || '').replace(/\D/g, '').slice(-10);
     if (clean.length !== 10) return null;
 
-    let contact = this.saveContactToBook({
-      name,
-      phone,
-      cleanPhone: clean,
-      campaign
-    });
+    let contact = this.data.contactsBook.find(c => c.cleanPhone === clean);
+    if (!contact) {
+      if (onlyIfExisting) {
+        // Do not add to contactsBook, but still resolve campaign status if connected
+        const isConnectedCall = status === 'completed' && (durationSec > 0 || (transcript && transcript.length > 15));
+        if (isConnectedCall && this.data.campaignContacts) {
+          const campEntry = this.data.campaignContacts.find(c => c.cleanPhone === clean);
+          if (campEntry) {
+            campEntry.status = 'connected';
+            campEntry.durationSec = durationSec;
+            campEntry.durationStr = durationSec > 0 ? `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}` : '01:00';
+            campEntry.summary = direction === 'inbound' 
+              ? ('✅ कॉलबैक (सफल बातचीत): ' + (summary || 'ग्राहक ने वापस कॉल किया, संदेश प्राप्त'))
+              : (summary || 'सफल बातचीत पूरी हुई');
+            campEntry.lastCallAt = new Date().toISOString();
+            if (audioUrl) campEntry.audioUrl = audioUrl;
+            this.save();
+          }
+        }
+        return null;
+      }
+      contact = this.saveContactToBook({
+        name,
+        phone,
+        cleanPhone: clean,
+        campaign
+      });
+    }
 
     if (!contact) return null;
 
@@ -1609,7 +1305,7 @@ class Database {
     return contact;
   }
 
-  recordCallHistoryFromLogs(logsArray) {
+  recordCallHistoryFromLogs(logsArray, { autoHarvestInbound = true } = {}) {
     if (!Array.isArray(logsArray)) return [];
     const botNumber = '8045440103';
     const processed = [];
@@ -1667,6 +1363,9 @@ class Database {
         if (userLine) summary = `पूछताछ: "${userLine.replace(/^user:/i, '').trim().substring(0, 80)}"`;
       }
 
+      const isInbound = log.call_direction === 'inbound';
+      const onlyIfExisting = isInbound ? !autoHarvestInbound : true;
+
       const contact = this.recordCallInteraction({
         cleanPhone: clean,
         phone: rawPhone,
@@ -1677,7 +1376,8 @@ class Database {
         summary,
         transcript: log.call_conversation || '',
         audioUrl: recUrl || null,
-        campaign: log.call_direction === 'inbound' ? 'इनकमिंग कॉल' : 'आउटगोइंग कॉल'
+        campaign: isInbound ? 'इनकमिंग कॉल' : 'आउटगोइंग कॉल',
+        onlyIfExisting
       });
 
       if (contact) processed.push(contact);

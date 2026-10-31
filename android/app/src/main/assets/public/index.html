@@ -4,9 +4,15 @@
   <script>
     // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
     (function() {
-      const CURRENT_VER = 'rb_v14_20261101_live';
+      const CURRENT_VER = 'rb_v15_20261101_live';
       if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
         localStorage.setItem('rb_active_version', CURRENT_VER);
+        // Clean out all old cached dummy records so fresh server state displays immediately
+        localStorage.removeItem('rb_customers');
+        localStorage.removeItem('rb_transactions');
+        localStorage.removeItem('rb_cached_contacts_book');
+        localStorage.removeItem('rb_cached_campaign_contacts');
+        localStorage.removeItem('rb_cached_omni_logs');
         if ('caches' in window) {
           caches.keys().then(function(names) {
             for (let name of names) {
@@ -2119,13 +2125,13 @@
     </div>
   </div>
 
-  <!-- APPLICATION SCRIPTS (Versioned ?v=14 for instant live cache busting) -->
-  <script src="/js/state.js?v=14"></script>
-  <script src="/js/khatabook.js?v=14"></script>
-  <script src="/js/inventory.js?v=14"></script>
-  <script src="/js/voice.js?v=14"></script>
-  <script src="/js/telephony.js?v=14"></script>
-  <script src="/js/sprayer.js?v=14"></script>
-  <script src="/js/app.js?v=14"></script>
+  <!-- APPLICATION SCRIPTS (Versioned ?v=15 for instant live cache busting) -->
+  <script src="/js/state.js?v=15"></script>
+  <script src="/js/khatabook.js?v=15"></script>
+  <script src="/js/inventory.js?v=15"></script>
+  <script src="/js/voice.js?v=15"></script>
+  <script src="/js/telephony.js?v=15"></script>
+  <script src="/js/sprayer.js?v=15"></script>
+  <script src="/js/app.js?v=15"></script>
 </body>
 </html>

@@ -710,7 +710,7 @@ async function syncAllOmnidimLogs() {
     }
 
     if (allLogs.length > 0) {
-      db.recordCallHistoryFromLogs(allLogs);
+      db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: false });
       console.log(`[Omnidim Sync] Successfully ingested ${allLogs.length} call logs into master directory.`);
     }
   } catch (err) {
@@ -826,7 +826,10 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 // ----------------------------------------------------
 const audioBufferCache = new Map();
 
-app.get('/api/omnidim/audio-proxy', async (req, res) => {
+app.all('/api/omnidim/audio-proxy', async (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).send('Method Not Allowed');
+  }
   try {
     let targetUrl = req.query.url;
     if (!targetUrl) {
@@ -857,8 +860,8 @@ app.get('/api/omnidim/audio-proxy', async (req, res) => {
       const arrayBuf = await response.arrayBuffer();
       audioBuffer = Buffer.from(arrayBuf);
       
-      // Cache up to 100 recent recordings (~50-100MB max)
-      if (audioBufferCache.size > 100) {
+      // Cache up to 150 recent recordings (~50-100MB max)
+      if (audioBufferCache.size > 150) {
         const oldestKey = audioBufferCache.keys().next().value;
         audioBufferCache.delete(oldestKey);
       }
@@ -868,39 +871,64 @@ app.get('/api/omnidim/audio-proxy', async (req, res) => {
     const totalSize = audioBuffer.length;
     const rangeHeader = req.headers.range;
 
-    if (rangeHeader) {
-      // Parse Range header e.g. "bytes=32768-" or "bytes=32768-65535"
-      const parts = rangeHeader.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Accept-Ranges, Content-Range');
 
-      if (isNaN(start) || start >= totalSize || (end !== undefined && end >= totalSize)) {
-        res.setHeader('Content-Range', `bytes */${totalSize}`);
-        return res.status(416).send('Requested range not satisfiable');
-      }
-
-      const chunkLength = (end - start) + 1;
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkLength,
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=86400',
-        'Access-Control-Allow-Origin': '*'
-      });
-
-      res.end(audioBuffer.subarray(start, end + 1));
-    } else {
-      res.writeHead(200, {
-        'Accept-Ranges': 'bytes',
-        'Content-Length': totalSize,
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=86400',
-        'Access-Control-Allow-Origin': '*'
-      });
-
-      res.end(audioBuffer);
+    if (!rangeHeader) {
+      res.setHeader('Content-Length', totalSize);
+      res.writeHead(200);
+      if (req.method === 'HEAD') return res.end();
+      return res.end(audioBuffer);
     }
+
+    // Parse Range header e.g. "bytes=0-", "bytes=131072-", "bytes=0-10000000", or "bytes=-32768"
+    const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+    if (!match) {
+      res.setHeader('Content-Length', totalSize);
+      res.writeHead(200);
+      if (req.method === 'HEAD') return res.end();
+      return res.end(audioBuffer);
+    }
+
+    let start = 0;
+    let end = totalSize - 1;
+
+    if (match[1] === '' && match[2] !== '') {
+      // Suffix byte range: e.g. bytes=-32768 (last 32KB)
+      const suffix = parseInt(match[2], 10);
+      start = Math.max(0, totalSize - suffix);
+      end = totalSize - 1;
+    } else if (match[1] !== '' && match[2] === '') {
+      // Open range: e.g. bytes=65536-
+      start = parseInt(match[1], 10);
+      end = totalSize - 1;
+    } else if (match[1] !== '' && match[2] !== '') {
+      // Closed range: e.g. bytes=0-1048576 or bytes=0-10000000
+      start = parseInt(match[1], 10);
+      // CLAMP end to totalSize - 1 (RFC 7233: Never return 416 if requested range exceeds file size!)
+      end = Math.min(totalSize - 1, parseInt(match[2], 10));
+    }
+
+    if (isNaN(start) || start < 0 || start >= totalSize || start > end) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${totalSize}`,
+        'Access-Control-Allow-Origin': '*'
+      });
+      return res.end();
+    }
+
+    const chunkLength = (end - start) + 1;
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+      'Content-Length': chunkLength
+    });
+
+    if (req.method === 'HEAD') return res.end();
+    return res.end(audioBuffer.subarray(start, end + 1));
   } catch (err) {
     console.warn('Audio proxy error:', err.message);
     if (!res.headersSent) {
