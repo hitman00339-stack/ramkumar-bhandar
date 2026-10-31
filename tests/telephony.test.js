@@ -344,6 +344,78 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(failedCalls[0].cleanPhone, '9876543210', 'फेल्ड कॉल में केवल 9876543210 होना चाहिए');
   });
 
+  await t.test('Number-Wise Call History & Auto-Harvesting of Incoming Callers into Permanent Directory', () => {
+    // 1. Setup a campaign contact that is pending
+    if (!db.data.campaignContacts) db.data.campaignContacts = [];
+    db.data.campaignContacts.push({
+      id: 'camp_9208321477',
+      name: 'राकेश वर्मा',
+      cleanPhone: '9208321477',
+      phone: '+91 92083 21477',
+      status: 'failed',
+      summary: 'पहले नहीं उठा',
+      campaign: 'उद्घाटन आमंत्रण'
+    });
+
+    // 2. Incoming call from 9208321477 comes in
+    const incomingLog = [
+      {
+        id: 10585193,
+        bot_name: 'Ramkumar Khad Bhandar - Incoming',
+        time_of_call: '10/31/2026 13:54:15',
+        from_number: '+919208321477',
+        to_number: '918045440103',
+        call_direction: 'inbound',
+        call_status: 'completed',
+        call_duration_in_seconds: 41,
+        call_duration_in_minutes: 1,
+        call_conversation: 'LLM: नमस्कार! यादव खाद भंडार में स्वागत है।<br/>User: उद्घाटन कब है?<br/>LLM: 4 नवंबर को है जी।<br/>User: ठीक है हम आ रहे हैं।',
+        sentiment_analysis_details: 'उद्घाटन आमंत्रण स्वीकार किया'
+      },
+      {
+        // Another new caller who was NEVER in the database before
+        id: 10585194,
+        bot_name: 'Ramkumar Khad Bhandar - Incoming',
+        time_of_call: '10/31/2026 14:10:00',
+        from_number: '+919336317193',
+        to_number: '918045440103',
+        call_direction: 'inbound',
+        call_status: 'completed',
+        call_duration_in_seconds: 30,
+        call_duration_in_minutes: 0,
+        call_conversation: 'LLM: नमस्कार!<br/>User: यूरिया मिल जाएगी?<br/>LLM: हाँ जी नया स्टॉक आ गया है।',
+        user_name: 'सुभाष किसान'
+      }
+    ];
+
+    // Harvest logs into database
+    const harvested = db.recordCallHistoryFromLogs(incomingLog);
+    assert.strictEqual(harvested.length, 2, 'दोनों इनकमिंग कॉल प्रोसेस होनी चाहिए');
+
+    // Verify contact 9336317193 was automatically created and saved permanently
+    const subhash = db.getContactProfile('9336317193');
+    assert(subhash, 'नया इनकमिंग कॉलर डायरेक्टरी में स्वतः सहेजा जाना चाहिए');
+    assert.strictEqual(subhash.name, 'सुभाष किसान');
+    assert.strictEqual(subhash.totalCalls, 1);
+    assert.strictEqual(subhash.callHistory.length, 1);
+    assert(subhash.lastTranscript.includes('यूरिया मिल जाएगी'));
+
+    // Verify contact 9208321477 was updated and campaign contact was auto-promoted to connected!
+    const campContact = db.data.campaignContacts.find(c => c.cleanPhone === '9208321477');
+    assert.strictEqual(campContact.status, 'connected', 'कॉलबैक के बाद कैम्पेन में स्थिति connected होनी चाहिए');
+    assert(campContact.summary.includes('सफल बातचीत') || campContact.summary.includes('कॉलबैक'));
+
+    // Verify saving personal data/notes works
+    db.updateContactPersonalData('9208321477', {
+      notes: '4 नवंबर को 2 लोगों के साथ आएंगे',
+      inquiryTopic: 'उद्घाटन आमंत्रण'
+    });
+
+    const rakesh = db.getContactProfile('9208321477');
+    assert.strictEqual(rakesh.personalData.notes, '4 नवंबर को 2 लोगों के साथ आएंगे');
+    assert.strictEqual(rakesh.personalData.inquiryTopic, 'उद्घाटन आमंत्रण');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

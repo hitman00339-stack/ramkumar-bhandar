@@ -2,7 +2,7 @@
 const TelephonyUI = {
   currentFilter: 'all',
   selectedWing: 'krishi', // 'krishi' | 'kirana'
-  currentCallTab: 'all',  // 'all' | 'connected' | 'failed' | 'pending'
+  currentCallTab: 'total_all',  // 'total_all' (कुल सुरक्षित नंबर) | 'inauguration' | 'connected' | 'failed' | 'pending' | 'all'
   currentWingFilter: 'all', // 'all' | 'krishi' | 'kirana'
   viewMode: 'spreadsheet', // 'spreadsheet' | 'split' | 'cards'
   searchQuery: '',
@@ -610,15 +610,104 @@ const TelephonyUI = {
       failedCalls.push(c);
     }
 
-    // Combined Total List: All dialed calls + pending customers + inauguration list
-    const pendingAsCalls = pendingCustomers.map(p => {
+    // Combined Total List: DEDUPLICATED MASTER DIRECTORY ("कुल सुरक्षित नंबर")
+    // Merges:
+    // 1. Permanent contactsBook (user-added bulk numbers + auto-harvested incoming callers)
+    // 2. Real-time call logs (Omnidim + local)
+    // 3. Khatabook pending credit customers
+    // Strictly deduplicated on clean 10-digit mobile number!
+    const masterMap = new Map();
+
+    // 1. Permanent contactsBook
+    (this.contactsBook || []).forEach(cb => {
+      const clean = (cb.cleanPhone || cb.phone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10) return;
+
+      const isConnected = connectedPhoneSet.has(clean) || cb.lastCallStatus === 'completed';
+      const isFailed = !isConnected && cb.lastCallStatus === 'failed';
+      const isPending = !isConnected && !isFailed;
+
+      let statusText = isConnected ? '✅ बात हुई' : (isFailed ? '❌ कनेक्ट नहीं हुआ' : '⏳ कॉल बाकी');
+      let statusClass = isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : (isFailed ? 'bg-rose-100 text-rose-900 border-rose-300' : 'bg-amber-100 text-amber-900 border-amber-300');
+
+      const isIncoming = cb.source === 'इनकमिंग कॉलर' || (cb.callHistory && cb.callHistory.some(h => h.direction === 'inbound'));
+      const formatted = cb.phone && cb.phone.includes('+91') ? cb.phone : `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+
+      masterMap.set(clean, {
+        id: 'cb_' + clean,
+        cleanPhone: clean,
+        phone: formatted,
+        rawPhone: clean,
+        customerName: cb.name || 'ग्रामवासी / ग्राहक',
+        village: cb.village || (isIncoming ? 'इनकमिंग पूछताछ' : (cb.campaign || 'स्थायी सुरक्षित नंबर')),
+        source: isIncoming ? '🟢 इनकमिंग कॉलर' : (cb.campaign ? `📢 ${cb.campaign}` : 'सुरक्षित नंबर'),
+        dueAmount: 0,
+        shopId: 'krishi',
+        direction: isIncoming ? 'inbound' : 'outbound',
+        durationSec: cb.lastDurationSec || 0,
+        durationMin: 0,
+        durationStr: cb.lastDurationSec > 0 ? `${String(Math.floor(cb.lastDurationSec / 60)).padStart(2, '0')}:${String(cb.lastDurationSec % 60).padStart(2, '0')}` : '--',
+        isConnected,
+        isFailed,
+        isPending,
+        totalCalls: cb.totalCalls || (cb.callHistory ? cb.callHistory.length : 0) || (isConnected ? 1 : 0),
+        failReason: isFailed ? 'फोन नहीं उठा या व्यस्त था' : '',
+        statusText,
+        statusClass,
+        time: cb.lastCallAt ? new Date(cb.lastCallAt).toLocaleDateString('hi-IN') : 'स्थायी',
+        summary: cb.personalData?.notes ? `📝 ${cb.personalData.notes}` : (cb.lastSummary || 'स्थायी डायरेक्टरी में सुरक्षित'),
+        transcript: cb.lastTranscript || '',
+        audioUrl: cb.audioUrl || null,
+        personalData: cb.personalData || {},
+        callHistory: cb.callHistory || []
+      });
+    });
+
+    // 2. Overlay live calls from allCalls
+    allCalls.forEach(c => {
+      const clean = (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10) return;
+
+      const existing = masterMap.get(clean);
+      if (existing) {
+        if (c.isConnected) {
+          existing.isConnected = true;
+          existing.isFailed = false;
+          existing.isPending = false;
+          existing.statusText = '✅ बात हुई';
+          existing.statusClass = 'bg-emerald-100 text-emerald-900 border-emerald-300';
+        }
+        if (c.audioUrl && !existing.audioUrl) existing.audioUrl = c.audioUrl;
+        if (c.transcript && !existing.transcript) existing.transcript = c.transcript;
+        if (c.durationSec > 0 && existing.durationSec === 0) {
+          existing.durationSec = c.durationSec;
+          existing.durationStr = c.durationStr;
+        }
+        if (c.time) existing.time = c.time;
+      } else {
+        masterMap.set(clean, {
+          ...c,
+          id: 'omni_' + clean,
+          cleanPhone: clean,
+          source: c.direction === 'inbound' ? '🟢 इनकमिंग कॉलर' : 'आउटगोइंग कॉल',
+          totalCalls: 1
+        });
+      }
+    });
+
+    // 3. Pending customers with outstanding Khatabook dues
+    pendingCustomers.forEach(p => {
+      const clean = (p.phone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10 || masterMap.has(clean)) return;
       const due = (p.balancesRupees ? p.balancesRupees[shopId] : (p.balances?.[shopId] ? p.balances[shopId] / 100 : 0)) || 0;
-      return {
+      masterMap.set(clean, {
         id: 'pend_' + p.id,
-        phone: p.phone || 'नंबर नहीं',
-        rawPhone: p.phone || '',
+        cleanPhone: clean,
+        phone: p.phone,
+        rawPhone: clean,
         customerName: p.name,
-        village: p.village || '',
+        village: p.village || 'खाता बही',
+        source: '📖 खाता ग्राहक',
         dueAmount: due,
         shopId: p.shopId || shopId,
         direction: 'pending_outbound',
@@ -628,6 +717,7 @@ const TelephonyUI = {
         isConnected: false,
         isFailed: false,
         isPending: true,
+        totalCalls: 0,
         failReason: 'अभी कॉल नहीं की गई',
         statusText: '⏳ कॉल बाकी',
         statusClass: 'bg-amber-100 text-amber-900 border-amber-300',
@@ -635,9 +725,18 @@ const TelephonyUI = {
         summary: `उधार बकाया ₹${due.toLocaleString('en-IN')} • तकादा कॉल शेष है`,
         transcript: '',
         audioUrl: null
-      };
+      });
     });
-    const totalAllList = [...allCalls, ...pendingAsCalls];
+
+    let totalAllList = Array.from(masterMap.values());
+    if (this.searchQuery) {
+      totalAllList = totalAllList.filter(c =>
+        (c.cleanPhone && c.cleanPhone.includes(this.searchQuery)) ||
+        (c.customerName && c.customerName.toLowerCase().includes(this.searchQuery)) ||
+        (c.village && c.village.toLowerCase().includes(this.searchQuery)) ||
+        (c.summary && c.summary.toLowerCase().includes(this.searchQuery))
+      );
+    }
 
     return {
       allCalls,
@@ -766,9 +865,34 @@ const TelephonyUI = {
         
         <!-- SPREADSHEET TABLE SECTION -->
         <div class="lg:col-span-8 flex flex-col gap-2.5 min-w-0" id="section-spreadsheet-table">
+          ${this.currentCallTab === 'total_all' ? `
+            <div class="p-3 bg-gradient-to-r from-indigo-50/90 to-emerald-50/90 rounded-2xl border border-indigo-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-2xs">
+              <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-xl bg-indigo-700 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <span class="material-symbols-outlined text-[20px]">verified_user</span>
+                </div>
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-slate-900 block">कुल सुरक्षित नंबर (मास्टर रजिस्टर)</span>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-300 font-numeric-display">
+                      ${calls.length} नंबर • डुप्लीकेट-मुक्त
+                    </span>
+                  </div>
+                  <span class="text-[11px] text-slate-600">आपके जोड़े गए नंबर + इनकमिंग कॉलर्स स्वतः सुरक्षित हैं। किसी भी समय अभियान में उपयोग करें।</span>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button onclick="TelephonyUI.openBulkNumbersModal()" class="h-8 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                  <span class="material-symbols-outlined text-[15px]">add</span>
+                  <span>नंबर जोड़ें</span>
+                </button>
+              </div>
+            </div>
+          ` : ''}
+
           <div class="flex items-center justify-between px-1">
             <div class="flex items-center gap-2">
-              <span class="font-bold text-xs text-slate-800">📋 कॉल रजिस्टर विवरण</span>
+              <span class="font-bold text-xs text-slate-800">${this.currentCallTab === 'total_all' ? '📑 सभी सुरक्षित नंबर सूची' : '📋 कॉल रजिस्टर विवरण'}</span>
               <span class="text-[11px] text-slate-500 font-medium font-numeric-display">(${calls.length} रिकॉर्ड्स)</span>
             </div>
             <span class="text-[11px] text-slate-400 hidden sm:inline">← दाईं ओर खिसकाकर पूरा रजिस्टर देखें →</span>
@@ -820,7 +944,16 @@ const TelephonyUI = {
                       <!-- Customer Name & Phone -->
                       <td class="p-3 whitespace-nowrap">
                         <div class="flex flex-col">
-                          <span class="font-bold text-slate-900 text-xs">${c.customerName}</span>
+                          <div class="flex items-center gap-1.5">
+                            <span onclick="TelephonyUI.openCustomerProfileModal('${c.cleanPhone || (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10)}')" class="font-bold text-slate-900 text-xs hover:text-indigo-700 cursor-pointer underline-offset-2 hover:underline" title="ग्राहक प्रोफाइल व इतिहास खोलें">
+                              ${c.customerName}
+                            </span>
+                            ${c.source ? `
+                              <span class="text-[9px] font-bold px-1.5 py-0.2 rounded-full ${c.source.includes('इनकमिंग') ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}">
+                                ${c.source}
+                              </span>
+                            ` : ''}
+                          </div>
                           <div class="flex items-center gap-1 font-mono font-bold text-slate-600 text-[11px] mt-0.5">
                             <span>${c.phone}</span>
                             ${c.rawPhone ? `
@@ -885,6 +1018,10 @@ const TelephonyUI = {
                       <!-- Action Buttons -->
                       <td class="p-3 whitespace-nowrap text-center">
                         <div class="flex items-center justify-center gap-1.5">
+                          <button onclick="TelephonyUI.openCustomerProfileModal('${c.cleanPhone || (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10)}')" class="h-8 px-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold text-[11px] flex items-center gap-1 border border-indigo-200 shadow-2xs active:scale-95 transition-all cursor-pointer" title="व्यक्तिगत नोट्स व कॉल इतिहास देखें">
+                            <span class="material-symbols-outlined text-[15px] text-indigo-700">account_circle</span>
+                            <span>प्रोफाइल</span>
+                          </button>
                           <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-8 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer" title="AI से दोबारा कॉल लगाएं">
                             <span class="material-symbols-outlined text-[15px]">call</span>
                             <span>कॉल करें</span>
@@ -2505,6 +2642,224 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         btn.innerText = '📞 AI एजेंट से कॉल लगाएं';
       }
     }
+  },
+
+  // ----------------------------------------------------
+  // CUSTOMER CRM PROFILE & NUMBER-WISE DATA STORAGE
+  // ----------------------------------------------------
+  activeProfileContact: null,
+
+  async openCustomerProfileModal(cleanPhone) {
+    if (!cleanPhone) return;
+    const clean = String(cleanPhone).replace(/\D/g, '').slice(-10);
+    if (!clean) return;
+
+    const modal = document.getElementById('modal-customer-crm-profile');
+    if (!modal) return;
+
+    // Reset fields while loading
+    const nameEl = document.getElementById('crm-profile-name');
+    const phoneEl = document.getElementById('crm-profile-phone');
+    const sourceBadge = document.getElementById('crm-profile-source-badge');
+    const totalCallsEl = document.getElementById('crm-profile-total-calls');
+    const lastStatusEl = document.getElementById('crm-profile-last-status');
+    const lastDurationEl = document.getElementById('crm-profile-last-duration');
+    const notesInput = document.getElementById('crm-profile-notes');
+    const inquiryInput = document.getElementById('crm-profile-inquiry-topic');
+    const historyList = document.getElementById('crm-profile-history-list');
+
+    if (nameEl) nameEl.innerText = 'लोड हो रहा है...';
+    if (phoneEl) phoneEl.innerText = `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+    if (notesInput) notesInput.value = '';
+    if (inquiryInput) inquiryInput.value = '';
+    if (historyList) historyList.innerHTML = '<div class="p-4 text-center text-xs text-slate-400">लोड हो रहा है...</div>';
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    let profile = null;
+    try {
+      const res = await fetch(`/api/contacts-book/${clean}/profile`);
+      if (res.ok) {
+        const json = await res.json();
+        profile = json.profile;
+      }
+    } catch (e) {
+      console.warn('Profile fetch failed:', e);
+    }
+
+    // Fallback to local contactsBook or search in cachedOmniLogs
+    if (!profile) {
+      profile = (this.contactsBook || []).find(c => (c.cleanPhone || '').replace(/\D/g, '').slice(-10) === clean);
+    }
+
+    if (!profile) {
+      const match = (this.cachedOmniLogs || []).find(c => {
+        const toClean = (c.to_number || '').replace(/\D/g, '');
+        const fromClean = (c.from_number || '').replace(/\D/g, '');
+        return toClean.endsWith(clean) || fromClean.endsWith(clean);
+      });
+      profile = {
+        cleanPhone: clean,
+        phone: `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`,
+        name: match?.user_name || 'ग्रामवासी / ग्राहक',
+        source: match?.call_direction === 'inbound' ? '🟢 इनकमिंग कॉलर' : 'आउटगोइंग कॉल',
+        totalCalls: match ? 1 : 0,
+        lastCallStatus: match?.call_status || 'pending',
+        lastDurationSec: (match?.call_duration_in_minutes || 0) * 60 + (match?.call_duration_in_seconds || 0),
+        personalData: {},
+        callHistory: match ? [{
+          id: 'hist_' + clean,
+          date: match.time_of_call || 'आज',
+          direction: match.call_direction || 'inbound',
+          status: match.call_status,
+          durationStr: '01:00',
+          summary: match.sentiment_analysis_details || match.call_summary || 'कॉल रिकॉर्ड',
+          transcript: match.call_conversation || '',
+          audioUrl: match.internal_recording_url || match.recording_url
+        }] : []
+      };
+    }
+
+    this.activeProfileContact = profile;
+
+    // Populate Modal
+    if (nameEl) nameEl.innerText = profile.name || 'ग्रामवासी / ग्राहक';
+    if (phoneEl) phoneEl.innerText = profile.phone || `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+    if (sourceBadge) {
+      const isInc = profile.source === 'इनकमिंग कॉलर' || (profile.callHistory && profile.callHistory.some(h => h.direction === 'inbound'));
+      sourceBadge.innerText = isInc ? '🟢 इनकमिंग कॉलर' : (profile.source || 'स्थायी सुरक्षित');
+      sourceBadge.className = isInc ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300' : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-200';
+    }
+
+    const total = profile.totalCalls || (profile.callHistory ? profile.callHistory.length : 0) || 0;
+    if (totalCallsEl) totalCallsEl.innerText = `${total} बार`;
+
+    const isConnected = profile.lastCallStatus === 'completed' || (profile.callHistory && profile.callHistory.some(h => h.status === 'completed'));
+    if (lastStatusEl) {
+      lastStatusEl.innerText = isConnected ? '✅ सफल बात' : (profile.lastCallStatus === 'failed' ? '❌ नहीं उठा' : '⏳ लंबित');
+      lastStatusEl.className = isConnected ? 'font-bold text-xs text-emerald-700' : (profile.lastCallStatus === 'failed' ? 'font-bold text-xs text-rose-700' : 'font-bold text-xs text-amber-700');
+    }
+
+    const dur = profile.lastDurationSec ? `${Math.floor(profile.lastDurationSec / 60)}m ${profile.lastDurationSec % 60}s` : '--';
+    if (lastDurationEl) lastDurationEl.innerText = dur;
+
+    // Fill personal notes
+    if (notesInput) notesInput.value = profile.personalData?.notes || '';
+    if (inquiryInput) inquiryInput.value = profile.personalData?.inquiryTopic || '';
+
+    // Render Turn-by-Turn History & Recordings
+    const history = profile.callHistory || [];
+    if (historyList) {
+      if (history.length === 0) {
+        historyList.innerHTML = `
+          <div class="p-6 bg-slate-50 rounded-2xl text-center text-xs text-slate-500 border border-slate-200">
+            इस नंबर पर अभी कोई कॉल इतिहास दर्ज नहीं है। जब भी कॉल होगी, पूरी बातचीत यहाँ सुरक्षित रहेगी।
+          </div>
+        `;
+      } else {
+        historyList.innerHTML = history.map((h, i) => {
+          const isInbound = h.direction === 'inbound';
+          let audioSrc = h.audioUrl;
+          if (audioSrc && audioSrc.startsWith('/')) audioSrc = 'https://omnidim.io' + audioSrc;
+
+          return `
+            <div class="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col gap-2">
+              <div class="flex items-center justify-between text-xs">
+                <div class="flex items-center gap-1.5 font-bold">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] ${isInbound ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-indigo-100 text-indigo-900 border border-indigo-200'}">
+                    <span class="material-symbols-outlined text-[13px]">${isInbound ? 'call_received' : 'call_made'}</span>
+                    <span>${isInbound ? 'इनकमिंग कॉल' : 'आउटगोइंग कॉल'}</span>
+                  </span>
+                  <span class="text-slate-500 font-normal text-[11px]">${h.date ? new Date(h.date).toLocaleString('hi-IN') : 'हाल ही में'}</span>
+                </div>
+                <span class="font-mono font-bold text-[11px] text-slate-700">⏱️ ${h.durationStr || '00:00'}</span>
+              </div>
+
+              ${h.summary ? `
+                <div class="text-xs text-slate-800 font-medium bg-white p-2 rounded-xl border border-slate-200">
+                  <span class="font-bold text-slate-600 block text-[10px] uppercase">बातचीत सारांश:</span>
+                  ${h.summary}
+                </div>
+              ` : ''}
+
+              ${audioSrc ? `
+                <div class="flex items-center justify-between bg-white p-2 rounded-xl border border-slate-200 gap-2">
+                  <span class="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[16px] text-emerald-700">record_voice_over</span>
+                    <span>कॉल रिकॉर्डिंग:</span>
+                  </span>
+                  <audio controls preload="none" class="h-8 max-w-[200px]" src="${audioSrc}"></audio>
+                </div>
+              ` : ''}
+
+              ${h.transcript ? `
+                <details class="text-xs text-slate-700 bg-white p-2 rounded-xl border border-slate-200 cursor-pointer">
+                  <summary class="font-bold text-indigo-700 hover:text-indigo-900 select-none text-[11px]">
+                    चैट ट्रांसक्रिप्ट (शब्द-दर-शब्द बातचीत) देखें
+                  </summary>
+                  <div class="mt-2 pt-2 border-t border-slate-100 whitespace-pre-wrap font-mono text-[11px] leading-relaxed max-h-36 overflow-y-auto">
+                    ${h.transcript.replace(/<br\s*\/?>/gi, '\n')}
+                  </div>
+                </details>
+              ` : ''}
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  },
+
+  closeCustomerProfileModal() {
+    const modal = document.getElementById('modal-customer-crm-profile');
+    if (modal) {
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+    this.activeProfileContact = null;
+  },
+
+  async saveContactPersonalData() {
+    if (!this.activeProfileContact) return;
+    const clean = this.activeProfileContact.cleanPhone;
+    const notes = document.getElementById('crm-profile-notes')?.value?.trim() || '';
+    const inquiryTopic = document.getElementById('crm-profile-inquiry-topic')?.value?.trim() || '';
+
+    try {
+      const res = await fetch(`/api/contacts-book/${clean}/personal-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes, inquiryTopic })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'सहेजने में विफल');
+
+      if (!this.activeProfileContact.personalData) this.activeProfileContact.personalData = {};
+      this.activeProfileContact.personalData.notes = notes;
+      this.activeProfileContact.personalData.inquiryTopic = inquiryTopic;
+
+      // Update in local contactsBook array
+      const local = (this.contactsBook || []).find(c => c.cleanPhone === clean);
+      if (local) {
+        if (!local.personalData) local.personalData = {};
+        local.personalData.notes = notes;
+        local.personalData.inquiryTopic = inquiryTopic;
+      }
+
+      AppState.showToast('✓ व्यक्तिगत डेटा भविष्य की कॉल्स के लिए सुरक्षित कर लिया गया!');
+      this.renderCurrentTab();
+    } catch (err) {
+      alert('त्रुटि: ' + err.message);
+    }
+  },
+
+  dialActiveProfileContact() {
+    if (!this.activeProfileContact) return;
+    const phone = this.activeProfileContact.rawPhone || this.activeProfileContact.phone;
+    const name = this.activeProfileContact.name || 'ग्राहक';
+    this.closeCustomerProfileModal();
+    this.redialCustomer(phone, name);
+  }
   }
 };
 

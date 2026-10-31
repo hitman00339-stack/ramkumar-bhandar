@@ -4,7 +4,7 @@
   <script>
     // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
     (function() {
-      const CURRENT_VER = 'rb_v11_20261031_live';
+      const CURRENT_VER = 'rb_v12_20261101_live';
       if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
         localStorage.setItem('rb_active_version', CURRENT_VER);
         if ('caches' in window) {
@@ -855,29 +855,29 @@
         <div class="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5">
           <!-- Category Tabs with smooth horizontal scroll -->
           <div class="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold flex-1 overflow-x-auto no-scrollbar py-1">
-            <button onclick="TelephonyUI.switchCallTab('all')" id="tab-btn-all" class="shrink-0 h-10 px-3 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer">
-              <span>📋 सभी डायल किए</span>
-              <span id="badge-count-all" class="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px]">0</span>
+            <button onclick="TelephonyUI.switchCallTab('total_all')" id="tab-btn-total_all" class="shrink-0 h-10 px-3.5 rounded-xl bg-white text-[#003629] shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+              <span>📑 कुल सुरक्षित नंबर</span>
+              <span id="badge-count-total_all" class="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-[10px] font-bold font-numeric-display">0</span>
             </button>
             <button onclick="TelephonyUI.switchCallTab('inauguration')" id="tab-btn-inauguration" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
               <span>🎈 उद्घाटन आमंत्रण</span>
               <span id="badge-count-inauguration" class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px]">0</span>
             </button>
             <button onclick="TelephonyUI.switchCallTab('connected')" id="tab-btn-connected" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
-              <span>✅ बात हुई</span>
+              <span>✅ बात हुई (कॉल हो चुकी)</span>
               <span id="badge-count-connected" class="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px]">0</span>
             </button>
             <button onclick="TelephonyUI.switchCallTab('failed')" id="tab-btn-failed" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
-              <span>❌ कनेक्ट नहीं हुआ</span>
+              <span>❌ कनेक्ट नहीं हुआ (उत्तर नहीं)</span>
               <span id="badge-count-failed" class="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px]">0</span>
             </button>
             <button onclick="TelephonyUI.switchCallTab('pending')" id="tab-btn-pending" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
-              <span>⏳ कॉल बाकी</span>
+              <span>⏳ कॉल बाकी (शेष)</span>
               <span id="badge-count-pending" class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px]">0</span>
             </button>
-            <button onclick="TelephonyUI.switchCallTab('total_all')" id="tab-btn-total_all" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
-              <span>📑 कुल रजिस्टर</span>
-              <span id="badge-count-total_all" class="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-[10px]">0</span>
+            <button onclick="TelephonyUI.switchCallTab('all')" id="tab-btn-all" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+              <span>📋 सभी कॉल रिकॉर्ड्स</span>
+              <span id="badge-count-all" class="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px]">0</span>
             </button>
           </div>
 
@@ -2029,13 +2029,103 @@
     </div>
   </div>
 
-  <!-- APPLICATION SCRIPTS (Versioned ?v=11 for instant live cache busting) -->
-  <script src="/js/state.js?v=11"></script>
-  <script src="/js/khatabook.js?v=11"></script>
-  <script src="/js/inventory.js?v=11"></script>
-  <script src="/js/voice.js?v=11"></script>
-  <script src="/js/telephony.js?v=11"></script>
-  <script src="/js/sprayer.js?v=11"></script>
-  <script src="/js/app.js?v=11"></script>
+  <!-- ========================================== -->
+  <!-- MODAL: CUSTOMER CRM PROFILE & NUMBER-WISE CALL HISTORY -->
+  <!-- ========================================== -->
+  <div class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end md:items-center justify-center p-0 md:p-4" id="modal-customer-crm-profile">
+    <div class="w-full max-w-xl bg-white rounded-t-3xl md:rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-700 to-indigo-900 text-white flex items-center justify-center font-bold text-lg shadow-sm" id="crm-profile-avatar">
+            👤
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h3 class="font-bold text-slate-900 text-lg truncate" id="crm-profile-name">ग्राहक प्रोफाइल</h3>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-200" id="crm-profile-source-badge">स्थायी सुरक्षित नंबर</span>
+            </div>
+            <p class="text-xs font-mono font-bold text-indigo-700" id="crm-profile-phone">+91 00000 00000</p>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeCustomerProfileModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 cursor-pointer">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <!-- Quick Metrics Strip -->
+      <div class="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-200 text-center">
+        <div>
+          <span class="text-[10px] font-bold text-slate-500 uppercase block">कुल कॉल्स</span>
+          <span class="font-bold text-slate-900 text-sm font-numeric-display" id="crm-profile-total-calls">0</span>
+        </div>
+        <div>
+          <span class="text-[10px] font-bold text-slate-500 uppercase block">कॉल स्थिति</span>
+          <span class="font-bold text-xs" id="crm-profile-last-status">--</span>
+        </div>
+        <div>
+          <span class="text-[10px] font-bold text-slate-500 uppercase block">अंतिम अवधि</span>
+          <span class="font-bold text-xs text-slate-700" id="crm-profile-last-duration">--</span>
+        </div>
+      </div>
+
+      <!-- Section 1: Personal Data & Notes (भविष्य की कॉल्स के लिए सुरक्षित डेटा) -->
+      <div class="bg-indigo-50/60 p-4 rounded-2xl border border-indigo-200 flex flex-col gap-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[16px] text-indigo-700">edit_note</span>
+            <span>व्यक्तिगत डेटा व नोट्स (भविष्य की कॉल्स में संदर्भ हेतु):</span>
+          </span>
+          <span class="text-[10px] text-indigo-800 font-medium">स्थायी सुरक्षित</span>
+        </div>
+        <div class="flex flex-col gap-2">
+          <div>
+            <label class="text-[11px] font-semibold text-slate-600 block mb-0.5">पूछताछ विषय / संदर्भ (Inquiry Topic):</label>
+            <input type="text" id="crm-profile-inquiry-topic" placeholder="उदा. उद्घाटन आमंत्रण, यूरिया खाद पूछताछ, उधार..." class="w-full h-9 px-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 font-medium outline-none focus:border-indigo-600"/>
+          </div>
+          <div>
+            <label class="text-[11px] font-semibold text-slate-600 block mb-0.5">विशेष व्यक्तिगत टिप्पणी / नोट्स (Personal Notes):</label>
+            <textarea id="crm-profile-notes" rows="2" placeholder="उदा. 4 नवंबर को 2 लोगों के साथ आएंगे, 2 बोरी डीएपी चाहिए..." class="w-full p-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 font-medium outline-none focus:border-indigo-600"></textarea>
+          </div>
+          <div class="flex justify-end">
+            <button onclick="TelephonyUI.saveContactPersonalData()" class="h-8 px-4 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[15px]">save</span>
+              <span>💾 जानकारी सहेजें</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Call History & Audio Recordings -->
+      <div class="flex flex-col gap-2">
+        <h4 class="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[16px] text-slate-600">history</span>
+          <span>कॉल इतिहास एवं ऑडियो रिकॉर्डिंग्स:</span>
+        </h4>
+        <div id="crm-profile-history-list" class="flex flex-col gap-2 max-h-[35vh] overflow-y-auto pr-1">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <!-- Footer Buttons -->
+      <div class="flex items-center justify-between pt-2 border-t border-slate-100">
+        <button id="crm-profile-call-btn" onclick="TelephonyUI.dialActiveProfileContact()" class="h-10 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer">
+          <span class="material-symbols-outlined text-[16px]">call</span>
+          <span>📞 AI कॉल लगाएं</span>
+        </button>
+        <button onclick="TelephonyUI.closeCustomerProfileModal()" class="h-10 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
+          बंद करें
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- APPLICATION SCRIPTS (Versioned ?v=12 for instant live cache busting) -->
+  <script src="/js/state.js?v=12"></script>
+  <script src="/js/khatabook.js?v=12"></script>
+  <script src="/js/inventory.js?v=12"></script>
+  <script src="/js/voice.js?v=12"></script>
+  <script src="/js/telephony.js?v=12"></script>
+  <script src="/js/sprayer.js?v=12"></script>
+  <script src="/js/app.js?v=12"></script>
 </body>
 </html>

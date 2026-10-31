@@ -24,13 +24,23 @@ const App = {
       this.render();
     });
 
-    // Initial render
-    this.render();
+    // Restore saved view or default to dookaanen
+    const savedView = localStorage.getItem('rb_current_view');
+    const savedShop = localStorage.getItem('rb_current_shop');
+    if (savedShop) {
+      AppState.currentShopId = savedShop;
+      AppState.detailShopId = savedShop;
+    }
+    if (savedView && savedView !== 'dookaanen' && document.getElementById(`view-${savedView}`)) {
+      this.navigateTo(savedView, { shopId: AppState.currentShopId });
+    } else {
+      this.render();
+    }
   },
 
   registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js?v=11', { updateViaCache: 'none' }).then(reg => {
+      navigator.serviceWorker.register('/sw.js?v=12', { updateViaCache: 'none' }).then(reg => {
         reg.update();
       }).catch(err => {
         console.warn('SW registration failed:', err);
@@ -142,6 +152,10 @@ const App = {
 
   navigateTo(viewId, params = {}) {
     AppState.currentView = viewId;
+    try {
+      localStorage.setItem('rb_current_view', viewId);
+      if (params.shopId) localStorage.setItem('rb_current_shop', params.shopId);
+    } catch (e) {}
 
     if (params.shopId) {
       AppState.detailShopId = params.shopId;

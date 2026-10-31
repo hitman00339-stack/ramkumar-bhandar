@@ -692,9 +692,19 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
       headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
     });
     const data = await response.json();
+    const logs = data.call_log_data || [];
+
+    // Automatically harvest incoming callers, store number-wise turn-by-turn history,
+    // and resolve callbacks in active campaigns
+    try {
+      db.recordCallHistoryFromLogs(logs);
+    } catch (e) {
+      console.warn('Auto recording logs error:', e.message);
+    }
+
     res.json({
       success: true,
-      logs: data.call_log_data || [],
+      logs,
       totalRecords: data.total_records || 0
     });
   } catch (err) {
@@ -804,6 +814,30 @@ app.delete('/api/contacts-book/:cleanPhone', (req, res) => {
   try {
     const deleted = db.deleteContactFromBook(req.params.cleanPhone);
     res.json({ success: true, deleted, message: 'संपर्क डायरेक्टरी से हटाया गया' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/contacts-book/:cleanPhone/profile', (req, res) => {
+  try {
+    const profile = db.getContactProfile(req.params.cleanPhone);
+    if (!profile) {
+      return res.status(404).json({ success: false, error: 'संपर्क डायरेक्टरी में नहीं मिला' });
+    }
+    res.json({ success: true, profile });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/contacts-book/:cleanPhone/personal-data', (req, res) => {
+  try {
+    const updated = db.updateContactPersonalData(req.params.cleanPhone, req.body);
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'संपर्क डायरेक्टरी में नहीं मिला' });
+    }
+    res.json({ success: true, message: 'व्यक्तिगत जानकारी सहेजी गई', contact: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

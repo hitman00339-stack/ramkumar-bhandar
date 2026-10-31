@@ -1512,6 +1512,175 @@ class Database {
     }
     return false;
   }
+
+  // ----------------------------------------------------
+  // NUMBER-WISE CALL INTERACTION & PERSONAL PROFILE ENGINE
+  // Stores turn-by-turn history, personal context, and auto-resolves callbacks
+  // ----------------------------------------------------
+  recordCallInteraction({
+    cleanPhone,
+    phone,
+    name,
+    direction = 'outbound',
+    durationSec = 0,
+    status = 'completed',
+    summary = '',
+    transcript = '',
+    audioUrl = null,
+    campaign = null,
+    notes = null
+  }) {
+    if (!this.data.contactsBook) this.data.contactsBook = [];
+    const clean = (cleanPhone || phone || '').replace(/\D/g, '').slice(-10);
+    if (clean.length !== 10) return null;
+
+    let contact = this.saveContactToBook({
+      name,
+      phone,
+      cleanPhone: clean,
+      campaign
+    });
+
+    if (!contact) return null;
+
+    const now = new Date().toISOString();
+    contact.totalCalls = (contact.totalCalls || 0) + 1;
+    contact.lastCallDate = now;
+    contact.lastCallDirection = direction;
+    contact.lastCallStatus = status;
+    contact.lastDurationSec = durationSec;
+    if (summary) contact.lastSummary = summary;
+    if (transcript) contact.lastTranscript = transcript;
+    if (audioUrl) contact.audioUrl = audioUrl;
+
+    if (!contact.personalData) contact.personalData = {};
+    if (notes) contact.personalData.notes = notes;
+
+    if (!contact.callHistory) contact.callHistory = [];
+    // Avoid duplicate history entries by timestamp/summary
+    const isDuplicate = contact.callHistory.some(h => 
+      h.direction === direction && 
+      Math.abs(new Date(h.date || 0) - new Date(now)) < 5000
+    );
+
+    if (!isDuplicate) {
+      contact.callHistory.unshift({
+        id: 'hist_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+        date: now,
+        direction,
+        status,
+        durationSec,
+        durationStr: durationSec > 0 ? `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}` : '00:00',
+        summary: summary || (status === 'completed' ? 'सफल बातचीत' : 'कॉल नहीं लगी'),
+        transcript: transcript || '',
+        audioUrl: audioUrl || null
+      });
+      // Keep up to 25 latest calls per number
+      if (contact.callHistory.length > 25) {
+        contact.callHistory = contact.callHistory.slice(0, 25);
+      }
+    }
+
+    // AUTO-CALLBACK & CAMPAIGN RESOLUTION:
+    // If call was connected (status completed or duration > 0),
+    // immediately mark any campaign entry for this customer as 'connected'!
+    // This ensures they are NEVER dialed again and REMOVED from not-received queue!
+    const isConnectedCall = status === 'completed' && (durationSec > 0 || (transcript && transcript.length > 15));
+    if (isConnectedCall && this.data.campaignContacts) {
+      const campEntry = this.data.campaignContacts.find(c => c.cleanPhone === clean);
+      if (campEntry) {
+        campEntry.status = 'connected';
+        campEntry.durationSec = durationSec;
+        campEntry.durationStr = durationSec > 0 ? `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}` : '01:00';
+        campEntry.summary = direction === 'inbound' 
+          ? `✅ कॉलबैक (सफल बातचीत): ${summary || 'ग्राहक ने वापस कॉल किया, संदेश प्राप्त'}`
+          : (summary || 'सफल बातचीत पूरी हुई');
+        campEntry.lastCallAt = now;
+        if (audioUrl) campEntry.audioUrl = audioUrl;
+      }
+    }
+
+    this.data.lastMutationTime = now;
+    this.save();
+    return contact;
+  }
+
+  recordCallHistoryFromLogs(logsArray) {
+    if (!Array.isArray(logsArray)) return [];
+    const botNumber = '8045440103';
+    const processed = [];
+
+    for (const log of logsArray) {
+      const toClean = (log.to_number || '').replace(/\D/g, '');
+      const fromClean = (log.from_number || '').replace(/\D/g, '');
+      let rawPhone = '';
+      const isOutbound = log.call_direction === 'outbound';
+
+      if (log.from_number === 'Web Call' || log.to_number === 'Web Call' || log.call_type === 'web_call') {
+        continue; // Skip web tests from master phone book
+      } else if (toClean.includes(botNumber)) {
+        rawPhone = log.from_number;
+      } else if (fromClean.includes(botNumber)) {
+        rawPhone = log.to_number;
+      } else {
+        rawPhone = isOutbound ? log.to_number : log.from_number;
+      }
+
+      const clean = (rawPhone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10) continue;
+
+      const durationSec = (log.call_duration_in_minutes || 0) * 60 + (log.call_duration_in_seconds || 0);
+      const rawStatus = (log.call_status || '').toLowerCase();
+      const status = rawStatus === 'completed' ? 'completed' : 'failed';
+
+      let recUrl = log.internal_recording_url || log.recording_url;
+      if (recUrl && recUrl.startsWith('/')) recUrl = 'https://omnidim.io' + recUrl;
+
+      let summary = log.sentiment_analysis_details || log.call_summary || '';
+      if (!summary && log.call_conversation) {
+        const lines = log.call_conversation.split(/<br\s*\/?>|\n/).map(l => l.trim()).filter(Boolean);
+        const userLine = lines.find(l => l.toLowerCase().startsWith('user:'));
+        if (userLine) summary = `पूछताछ: "${userLine.replace(/^user:/i, '').trim().substring(0, 80)}"`;
+      }
+
+      const contact = this.recordCallInteraction({
+        cleanPhone: clean,
+        phone: rawPhone,
+        name: log.user_name || 'ग्रामवासी / ग्राहक',
+        direction: log.call_direction || 'inbound',
+        durationSec,
+        status,
+        summary,
+        transcript: log.call_conversation || '',
+        audioUrl: recUrl || null,
+        campaign: log.call_direction === 'inbound' ? 'इनकमिंग कॉल' : 'आउटगोइंग कॉल'
+      });
+
+      if (contact) processed.push(contact);
+    }
+
+    return processed;
+  }
+
+  updateContactPersonalData(cleanPhone, personalData = {}) {
+    if (!this.data.contactsBook) return null;
+    const clean = cleanPhone.replace(/\D/g, '').slice(-10);
+    const contact = this.data.contactsBook.find(c => c.cleanPhone === clean);
+    if (!contact) return null;
+
+    if (!contact.personalData) contact.personalData = {};
+    Object.assign(contact.personalData, personalData);
+    contact.updatedAt = new Date().toISOString();
+    this.data.lastMutationTime = contact.updatedAt;
+    this.save();
+    return contact;
+  }
+
+  getContactProfile(cleanPhone) {
+    if (!this.data.contactsBook) return null;
+    const clean = cleanPhone.replace(/\D/g, '').slice(-10);
+    return this.data.contactsBook.find(c => c.cleanPhone === clean) || null;
+  }
 }
 
 module.exports = {
