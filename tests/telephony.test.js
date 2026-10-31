@@ -216,6 +216,134 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(c2.status, 'failed');
   });
 
+  await t.test('Permanent Contacts Directory: Stores contacts, strictly deduplicates on clean 10-digit number, and allows multi-campaign reuse', () => {
+    // 1. Initial bulk save from Campaign A (Inauguration)
+    const listA = [
+      { name: 'रामलाल', phone: '9580133593', village: 'कुँवरगद्दी' },
+      { name: 'मोहन यादव', phone: '+91 9826011223', village: 'सीतापुर' },
+      { name: 'सुरेश', phone: '08175044956', village: 'लहरपुर' }
+    ];
+    const savedA = db.saveContactsBookBulk(listA, 'नई किराना दुकान उद्घाटन (4 नवंबर)');
+    assert.strictEqual(savedA.length, 3);
+    assert.strictEqual(db.getContactsBook().length, 3);
+
+    // 2. Secondary bulk save from Campaign B (Fertilizer arrival), with 1 overlapping number and 1 new number
+    const listB = [
+      { name: 'रामलाल पाटीदार', phone: '+91-9580133593' }, // Duplicate phone, richer name
+      { name: 'दिनेश कुमार', phone: '9123456780', village: 'महमूदाबाद' } // Brand new
+    ];
+    const savedB = db.saveContactsBookBulk(listB, 'यूरिया खाद आगमन सूचना');
+    assert.strictEqual(savedB.length, 2);
+
+    // Strict zero-duplicate invariant: Total unique contacts should now be exactly 4 (3 from A + 1 new from B)
+    const allContacts = db.getContactsBook();
+    assert.strictEqual(allContacts.length, 4, 'डायरेक्टरी में बिना डुप्लीकेट के कुल 4 संपर्क होने चाहिए');
+
+    // Verify ramlal contact updated with new name and multi-campaign history
+    const ramlal = allContacts.find(c => c.cleanPhone === '9580133593');
+    assert(ramlal);
+    assert.strictEqual(ramlal.name, 'रामलाल पाटीदार', 'बेहतर नाम अपडेट होना चाहिए');
+    assert.strictEqual(ramlal.campaigns.length, 2);
+    assert(ramlal.campaigns.includes('नई किराना दुकान उद्घाटन (4 नवंबर)'));
+    assert(ramlal.campaigns.includes('यूरिया खाद आगमन सूचना'));
+
+    // 3. Delete contact
+    const deleted = db.deleteContactFromBook('9123456780');
+    assert.strictEqual(deleted, true);
+    assert.strictEqual(db.getContactsBook().length, 3);
+  });
+
+  await t.test('Incoming Callback Resolution: When a customer calls back after an unanswered outbound call, they are removed from failedCalls and marked connected', () => {
+    const botNumber = '8045440103';
+
+    // Simulated call history:
+    // 1. Earlier outbound call to customer 9208321477 failed (no-answer, 0 sec)
+    // 2. Later inbound call from same customer 9208321477 completed (41 sec)
+    // 3. Outbound call to customer 9876543210 failed (no-answer, 0 sec) and did NOT call back
+    const omniLogs = [
+      {
+        id: 10585193,
+        bot_name: 'Ramkumar Khad Bhandar - Incoming',
+        time_of_call: '10/31/2026 13:54:15',
+        from_number: '+919208321477',
+        to_number: '918045440103',
+        call_direction: 'inbound',
+        call_status: 'completed',
+        call_duration_in_seconds: 41,
+        call_duration_in_minutes: 1
+      },
+      {
+        id: 10561336,
+        bot_name: 'Ramkumar Khad Bhandar Kuwargaddi - Outgoing',
+        time_of_call: '10/31/2026 12:27:24',
+        from_number: '+918045440103',
+        to_number: '+919208321477',
+        call_direction: 'outbound',
+        call_status: 'no-answer',
+        call_duration_in_seconds: 0,
+        call_duration_in_minutes: 0
+      },
+      {
+        id: 10561337,
+        bot_name: 'Ramkumar Khad Bhandar Kuwargaddi - Outgoing',
+        time_of_call: '10/31/2026 12:30:00',
+        from_number: '+918045440103',
+        to_number: '+919876543210',
+        call_direction: 'outbound',
+        call_status: 'no-answer',
+        call_duration_in_seconds: 0,
+        call_duration_in_minutes: 0
+      }
+    ];
+
+    // Process calls
+    const processedCalls = omniLogs.map(c => {
+      const isOutbound = c.call_direction === 'outbound';
+      const toClean = (c.to_number || '').replace(/\D/g, '');
+      const fromClean = (c.from_number || '').replace(/\D/g, '');
+      let phone = '';
+      if (toClean.includes(botNumber)) phone = c.from_number;
+      else if (fromClean.includes(botNumber)) phone = c.to_number;
+      else phone = isOutbound ? c.to_number : c.from_number;
+
+      const totalSec = (c.call_duration_in_minutes * 60) + c.call_duration_in_seconds;
+      const rawStatus = (c.call_status || '').toLowerCase();
+      const isConnected = totalSec > 0 && rawStatus !== 'no-answer' && rawStatus !== 'busy';
+      const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+
+      return {
+        id: c.id,
+        phone,
+        cleanPhone,
+        isConnected,
+        isFailed: !isConnected,
+        totalSec
+      };
+    });
+
+    // Step 1: Collect all connected 10-digit clean numbers
+    const connectedPhoneSet = new Set();
+    processedCalls.forEach(c => {
+      if (c.isConnected && c.cleanPhone) connectedPhoneSet.add(c.cleanPhone);
+    });
+
+    assert.strictEqual(connectedPhoneSet.has('9208321477'), true, '9208321477 कॉलबैक से कनेक्ट हुआ है');
+    assert.strictEqual(connectedPhoneSet.has('9876543210'), false, '9876543210 अभी तक कनेक्ट नहीं हुआ');
+
+    // Step 2: Resolve failed calls - MUST EXCLUDE any customer that called back or connected!
+    const failedCalls = processedCalls.filter(c => {
+      if (!c.isFailed) return false;
+      if (c.cleanPhone && connectedPhoneSet.has(c.cleanPhone)) {
+        return false; // Suppress / remove from failed calls list!
+      }
+      return true;
+    });
+
+    // Customer 9208321477 should be REMOVED from failedCalls
+    assert.strictEqual(failedCalls.length, 1, 'केवल 1 फेल्ड कॉल बचनी चाहिए (जिसने कॉलबैक नहीं किया)');
+    assert.strictEqual(failedCalls[0].cleanPhone, '9876543210', 'फेल्ड कॉल में केवल 9876543210 होना चाहिए');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

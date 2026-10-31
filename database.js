@@ -61,6 +61,14 @@ class Database {
           this.data.sprayerHistory = [];
           needsSave = true;
         }
+        if (!this.data.contactsBook) {
+          this.data.contactsBook = [];
+          needsSave = true;
+        }
+        if (!this.data.campaignContacts) {
+          this.data.campaignContacts = [];
+          needsSave = true;
+        }
         if (needsSave) this.save();
         return;
       } catch (err) {
@@ -1423,6 +1431,86 @@ class Database {
       this.save();
     }
     return callsMade;
+  }
+
+  // ----------------------------------------------------
+  // PERMANENT CONTACTS DIRECTORY (स्थायी संपर्क डायरेक्टरी)
+  // Strictly deduplicated by clean 10-digit Indian phone number
+  // ----------------------------------------------------
+  getContactsBook() {
+    if (!this.data.contactsBook) this.data.contactsBook = [];
+    return this.data.contactsBook;
+  }
+
+  saveContactToBook({ name, phone, cleanPhone, village, category, campaign }) {
+    if (!this.data.contactsBook) this.data.contactsBook = [];
+    const clean = (cleanPhone || phone || '').replace(/\D/g, '').slice(-10);
+    if (clean.length !== 10) return null;
+
+    const formatted = `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+    let contact = this.data.contactsBook.find(c => c.cleanPhone === clean);
+
+    const now = new Date().toISOString();
+    if (contact) {
+      // Update name if new name is more informative or longer
+      if (name && name !== 'ग्रामवासी / ग्राहक') {
+        if (!contact.name || contact.name === 'ग्रामवासी / ग्राहक' || name.trim().length > contact.name.length) {
+          contact.name = name.trim();
+        }
+      }
+      if (village && !contact.village) contact.village = village.trim();
+      if (!contact.campaigns) contact.campaigns = [];
+      if (campaign && !contact.campaigns.includes(campaign)) {
+        contact.campaigns.push(campaign);
+      }
+      contact.updatedAt = now;
+    } else {
+      contact = {
+        id: 'cont_' + clean,
+        name: (name || 'ग्रामवासी / ग्राहक').trim(),
+        cleanPhone: clean,
+        phone: formatted,
+        village: (village || '').trim(),
+        category: category || 'customer',
+        campaigns: campaign ? [campaign] : [],
+        createdAt: now,
+        updatedAt: now
+      };
+      this.data.contactsBook.push(contact);
+    }
+    this.data.lastMutationTime = now;
+    this.save();
+    return contact;
+  }
+
+  saveContactsBookBulk(contactsArray, campaignName = null) {
+    if (!Array.isArray(contactsArray)) return [];
+    const saved = [];
+    for (const c of contactsArray) {
+      const res = this.saveContactToBook({
+        name: c.name,
+        phone: c.phone,
+        cleanPhone: c.cleanPhone,
+        village: c.village,
+        category: c.category,
+        campaign: campaignName || c.campaign
+      });
+      if (res) saved.push(res);
+    }
+    return saved;
+  }
+
+  deleteContactFromBook(cleanPhone) {
+    if (!this.data.contactsBook) return false;
+    const clean = cleanPhone.replace(/\D/g, '').slice(-10);
+    const initialLen = this.data.contactsBook.length;
+    this.data.contactsBook = this.data.contactsBook.filter(c => c.cleanPhone !== clean);
+    if (this.data.contactsBook.length !== initialLen) {
+      this.data.lastMutationTime = new Date().toISOString();
+      this.save();
+      return true;
+    }
+    return false;
   }
 }
 

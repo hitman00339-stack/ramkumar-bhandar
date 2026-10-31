@@ -746,6 +746,47 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5.1.0 PERMANENT CONTACTS DIRECTORY (स्थायी संपर्क डायरेक्टरी)
+// Strictly deduplicated by 10-digit Indian mobile number
+// ----------------------------------------------------
+app.get('/api/contacts-book', (req, res) => {
+  try {
+    const contacts = db.getContactsBook();
+    res.json({ success: true, count: contacts.length, contacts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/contacts-book', (req, res) => {
+  try {
+    const { contacts, campaign } = req.body;
+    if (!Array.isArray(contacts) || contacts.length === 0) {
+      return res.status(400).json({ success: false, error: 'कोई संपर्क प्राप्त नहीं हुआ' });
+    }
+    const saved = db.saveContactsBookBulk(contacts, campaign);
+    res.json({
+      success: true,
+      message: `${saved.length} संपर्क डायरेक्टरी में स्थायी रूप से सहेजे गए`,
+      savedCount: saved.length,
+      totalCount: db.getContactsBook().length,
+      contacts: db.getContactsBook()
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/contacts-book/:cleanPhone', (req, res) => {
+  try {
+    const deleted = db.deleteContactFromBook(req.params.cleanPhone);
+    res.json({ success: true, deleted, message: 'संपर्क डायरेक्टरी से हटाया गया' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ----------------------------------------------------
 // 5.1.1 BULK CAMPAIGN CALLING (नई किराना दुकान उद्घाटन आमंत्रण)
 // ----------------------------------------------------
 app.get('/api/campaign/contacts', (req, res) => {
@@ -768,6 +809,9 @@ app.post('/api/campaign/contacts', (req, res) => {
 
     const campaignName = campaign || 'नई किराना दुकान उद्घाटन आमंत्रण';
     const added = [];
+
+    // Automatically persist ALL contacts into permanent contactsBook with strict deduplication!
+    db.saveContactsBookBulk(contacts, campaignName);
 
     contacts.forEach(c => {
       const rawPhone = String(c.phone || '').trim();
@@ -803,10 +847,11 @@ app.post('/api/campaign/contacts', (req, res) => {
 
     res.json({
       success: true,
-      message: `${added.length} नए संपर्क सफलतापूर्वक जोड़े गए`,
+      message: `${added.length} नए संपर्क सफलतापूर्वक जोड़े गए (डायरेक्टरी में सुरक्षित)`,
       addedCount: added.length,
       totalCount: db.data.campaignContacts.length,
-      contacts: db.data.campaignContacts
+      contacts: db.data.campaignContacts,
+      contactsBookTotal: db.getContactsBook().length
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

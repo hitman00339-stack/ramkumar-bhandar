@@ -23,10 +23,14 @@ const TelephonyUI = {
   campaignCurrentIndex: 0,
   isCampaignCalling: false,
 
+  // Permanent Contacts Book (Cross-campaign directory, zero duplicates)
+  contactsBook: [],
+
   init() {
     this.setupListeners();
     this.fetchLiveOmnidimLogs();
     this.fetchCampaignContacts();
+    this.fetchContactsBook();
 
     // Auto-refresh Omnidimension logs every 20 seconds when visible
     setInterval(() => {
@@ -469,17 +473,43 @@ const TelephonyUI = {
 
     let allCalls = [...omniCalls, ...localCalls];
 
-    // Inauguration Campaign Contacts
+    // 3. Extract all connected 10-digit clean phone numbers across ALL calls (outbound & inbound)
+    const connectedPhoneSet = new Set();
+    allCalls.forEach(c => {
+      if (c.isConnected) {
+        const clean = (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (clean.length === 10) connectedPhoneSet.add(clean);
+      }
+    });
+
+    // 4. Inauguration Campaign Contacts (With Automatic Incoming Callback Resolution)
     const inaugurationCalls = (this.campaignContacts || []).map(c => {
-      const isConnected = c.status === 'connected';
-      const isFailed = c.status === 'failed';
-      const isCalling = c.status === 'calling';
-      const isPending = !isConnected && !isFailed && !isCalling;
+      const cleanPhone = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      const customerCalledBack = cleanPhone && connectedPhoneSet.has(cleanPhone);
+
+      let isConnected = c.status === 'connected' || customerCalledBack;
+      let isFailed = c.status === 'failed' && !customerCalledBack; // Suppressed if customer called back!
+      let isCalling = c.status === 'calling';
+      let isPending = !isConnected && !isFailed && !isCalling;
+
+      // Auto-sync status back to database if customer connected or called back
+      if (customerCalledBack && c.status !== 'connected' && cleanPhone) {
+        c.status = 'connected';
+        fetch('/api/campaign/update-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cleanPhone,
+            status: 'connected',
+            summary: 'सफल बातचीत • ग्राहक ने वापस कॉल किया'
+          })
+        }).catch(() => {});
+      }
 
       let statusText = '⏳ कॉल बाकी';
       let statusClass = 'bg-amber-100 text-amber-900 border-amber-300';
       if (isConnected) {
-        statusText = '✅ बात हुई';
+        statusText = customerCalledBack && c.status !== 'connected' ? '✅ बात हुई (कॉलबैक)' : '✅ बात हुई';
         statusClass = 'bg-emerald-100 text-emerald-900 border-emerald-300';
       } else if (isFailed) {
         statusText = '❌ नहीं उठा / नहीं लगा';
@@ -489,7 +519,6 @@ const TelephonyUI = {
         statusClass = 'bg-sky-100 text-sky-900 border-sky-300 animate-pulse';
       }
 
-      const cleanPhone = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
       const formatted = cleanPhone.length === 10 ? `+91 ${cleanPhone.slice(0, 5)} ${cleanPhone.slice(5)}` : (c.phone || cleanPhone);
 
       return {
@@ -557,7 +586,29 @@ const TelephonyUI = {
     });
 
     const connectedCalls = allCalls.filter(c => c.isConnected);
-    const failedCalls = allCalls.filter(c => c.isFailed);
+
+    // CRITICAL: Failed Calls (Unconnected) Resolution & Deduplication
+    // 1. If any person who failed earlier subsequently connected or called back, REMOVE THEM COMPLETELY!
+    // 2. Strictly deduplicate by 10-digit number so the redial queue has only 1 entry per customer.
+    const seenFailedPhones = new Set();
+    const failedCalls = [];
+
+    for (const c of allCalls) {
+      if (!c.isFailed) continue;
+      const clean = (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+
+      // CRITICAL: If customer has connected or called back, REMOVE FROM FAILED CALLS!
+      if (clean && connectedPhoneSet.has(clean)) {
+        continue;
+      }
+
+      // Deduplicate so same phone does not appear multiple times in the redial list
+      if (clean && clean.length === 10) {
+        if (seenFailedPhones.has(clean)) continue;
+        seenFailedPhones.add(clean);
+      }
+      failedCalls.push(c);
+    }
 
     // Combined Total List: All dialed calls + pending customers + inauguration list
     const pendingAsCalls = pendingCustomers.map(p => {
@@ -1795,25 +1846,35 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
   parseBulkNumbersInput(text) {
     const raw = text || '';
-    const lines = raw.split(/[\n,;]+/);
+    const lines = raw.split(/\r?\n/);
     const contacts = [];
     const seen = new Set();
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const match = trimmed.match(/(?:\+?91[\s-]?)?([6-9]\d{9})/);
-      if (match) {
-        const last10 = match[1];
-        if (!seen.has(last10)) {
-          seen.add(last10);
-          let name = trimmed.replace(match[0], '').replace(/[-:–—()]/g, '').trim();
-          if (!name || name.length < 2) name = 'ग्रामवासी / ग्राहक';
-          contacts.push({
-            name,
-            cleanPhone: last10,
-            phone: `+91 ${last10.slice(0, 5)} ${last10.slice(5)}`
-          });
+    for (const rawLine of lines) {
+      if (!rawLine.trim()) continue;
+
+      // Also support multiple comma/semicolon separated items if no name text is present
+      const subItems = (rawLine.includes(',') && !/[a-zA-Z\u0900-\u097F]/.test(rawLine)) ?
+        rawLine.split(/[,;]+/) : [rawLine];
+
+      for (const item of subItems) {
+        const trimmed = item.trim();
+        if (!trimmed) continue;
+
+        // Matches Indian mobile: optional +91, 91, or 0, followed by 10 digits starting with 6, 7, 8, or 9
+        const match = trimmed.match(/(?:(?:\+?91[\s-]?)|\b0)?([6-9]\d{9})\b/);
+        if (match) {
+          const last10 = match[1];
+          if (!seen.has(last10)) {
+            seen.add(last10);
+            let name = trimmed.replace(match[0], '').replace(/[-:–—()\t]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (!name || name.length < 2) name = 'ग्रामवासी / ग्राहक';
+            contacts.push({
+              name,
+              cleanPhone: last10,
+              phone: `+91 ${last10.slice(0, 5)} ${last10.slice(5)}`
+            });
+          }
         }
       }
     }
@@ -1827,6 +1888,152 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }
 
     return contacts;
+  },
+
+  // ----------------------------------------------------
+  // PERMANENT CONTACTS DIRECTORY (स्थायी संपर्क डायरेक्टरी)
+  // ----------------------------------------------------
+  async fetchContactsBook() {
+    try {
+      const res = await fetch('/api/contacts-book');
+      if (res.ok) {
+        const data = await res.json();
+        this.contactsBook = data.contacts || [];
+        this.updateContactsBookBadges();
+      }
+    } catch (err) {
+      console.warn('Fetch contacts book error:', err.message);
+    }
+  },
+
+  updateContactsBookBadges() {
+    const count = this.contactsBook ? this.contactsBook.length : 0;
+    const badge1 = document.getElementById('contacts-book-count-badge');
+    const badge2 = document.getElementById('top-contacts-book-count');
+    if (badge1) badge1.innerText = count;
+    if (badge2) badge2.innerText = count;
+  },
+
+  loadFromContactsBookModal() {
+    if (!this.contactsBook || this.contactsBook.length === 0) {
+      alert('डायरेक्टरी में अभी कोई सुरक्षित नंबर नहीं है। नीचे दिए गए टेक्स्ट एरिया में नंबर दर्ज करें, वे स्वतः डायरेक्टरी में हमेशा के लिए सुरक्षित हो जाएंगे।');
+      return;
+    }
+    const input = document.getElementById('bulk-numbers-input');
+    if (!input) return;
+
+    // Load formatted list: Name - Clean 10 digits
+    const lines = this.contactsBook.map(c => {
+      const clean = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      if (c.name && c.name !== 'ग्रामवासी / ग्राहक') {
+        return `${c.name} - ${clean}`;
+      }
+      return clean;
+    });
+
+    input.value = lines.join('\n');
+    this.parseBulkNumbersInput(input.value);
+    AppState.showToast(`📖 डायरेक्टरी से ${this.contactsBook.length} सुरक्षित नंबर लोड किए गए`);
+  },
+
+  pasteExampleNumbers() {
+    const input = document.getElementById('bulk-numbers-input');
+    if (!input) return;
+    input.value = `8175044956\n+91 9208321477 (राकेश वर्मा)\nसुरेश कुमार - 9876543210\n9123456780, 8877665544`;
+    this.parseBulkNumbersInput(input.value);
+    AppState.showToast('✓ उदाहरण नंबर भर दिए गए');
+  },
+
+  openContactsDirectoryModal() {
+    const modal = document.getElementById('modal-contacts-directory');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    this.renderContactsDirectory();
+  },
+
+  closeContactsDirectoryModal() {
+    const modal = document.getElementById('modal-contacts-directory');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  },
+
+  renderContactsDirectory(filterText = '') {
+    const listEl = document.getElementById('contacts-directory-list');
+    const countEl = document.getElementById('contacts-directory-total-count');
+    if (!listEl) return;
+
+    const query = (filterText || '').toLowerCase().trim();
+    const contacts = (this.contactsBook || []).filter(c => {
+      if (!query) return true;
+      return (c.name && c.name.toLowerCase().includes(query)) ||
+             (c.cleanPhone && c.cleanPhone.includes(query)) ||
+             (c.village && c.village.toLowerCase().includes(query));
+    });
+
+    if (countEl) countEl.innerText = this.contactsBook ? this.contactsBook.length : 0;
+
+    if (contacts.length === 0) {
+      listEl.innerHTML = `
+        <div class="p-8 bg-slate-50 rounded-2xl text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-1.5 border border-slate-200">
+          <span class="material-symbols-outlined text-[32px] text-slate-400">contact_phone</span>
+          <span class="font-bold text-slate-700">कोई संपर्क नहीं मिला</span>
+          <span class="text-[11px]">अभियान में नंबर जोड़ते ही वे यहाँ स्वतः बिना डुप्लीकेट के सुरक्षित हो जाएंगे।</span>
+        </div>
+      `;
+      return;
+    }
+
+    listEl.innerHTML = contacts.map(c => {
+      const campTags = (c.campaigns || []).map(cp => `
+        <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200 font-medium">
+          ${cp}
+        </span>
+      `).join('');
+
+      return `
+        <div class="p-3 bg-white rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between gap-3 hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-900 flex items-center justify-center font-bold text-xs shrink-0">
+              ${(c.name || 'ग')[0]}
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="font-bold text-xs text-slate-900 truncate">${c.name || 'ग्रामवासी / ग्राहक'}</span>
+                ${c.village ? `<span class="text-[10px] text-slate-500">(${c.village})</span>` : ''}
+              </div>
+              <span class="font-mono text-xs font-bold text-emerald-800">${c.phone || ('+91 ' + c.cleanPhone)}</span>
+              ${campTags ? `<div class="flex items-center gap-1 mt-1 flex-wrap">${campTags}</div>` : ''}
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="TelephonyUI.redialCustomer('${c.cleanPhone}', '${c.name}')" class="h-8 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 active:scale-95 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">call</span>
+              <span>कॉल</span>
+            </button>
+            <button onclick="TelephonyUI.deleteContactFromDirectory('${c.cleanPhone}')" class="h-8 w-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 flex items-center justify-center active:scale-95 cursor-pointer" title="हटाएं">
+              <span class="material-symbols-outlined text-[16px]">delete</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  },
+
+  async deleteContactFromDirectory(cleanPhone) {
+    if (!confirm('क्या आप इस नंबर को डायरेक्टरी से हटाना चाहते हैं?')) return;
+    try {
+      const res = await fetch(`/api/contacts-book/${cleanPhone}`, { method: 'DELETE' });
+      if (res.ok) {
+        this.contactsBook = this.contactsBook.filter(c => c.cleanPhone !== cleanPhone);
+        this.updateContactsBookBadges();
+        this.renderContactsDirectory();
+        AppState.showToast('संपर्क डायरेक्टरी से हटाया गया');
+      }
+    } catch (e) {
+      alert('हटाने में त्रुटि: ' + e.message);
+    }
   },
 
   async fetchCampaignContacts() {
@@ -2029,7 +2236,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       try {
         const logsRes = await fetch('/api/omnidim/call-logs');
         const logsData = await logsRes.json();
-        const logs = logsData.calls || [];
+        const logs = logsData.logs || logsData.calls || [];
 
         const matchingLog = logs.find(l => {
           const toClean = (l.to_number || '').replace(/\D/g, '');

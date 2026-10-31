@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
   <meta name="theme-color" content="#003629"/>
   <meta name="description" content="रामकुमार भंडार - दोनों दुकानों का पूरा हिसाब, एक ही जगह"/>
   <title>रामकुमार भंडार - कृषि एवं किराना दुकान प्रबंधन</title>
@@ -731,6 +734,12 @@
           </div>
 
           <div class="flex items-center gap-2 flex-wrap">
+            <!-- Permanent Directory Button -->
+            <button onclick="TelephonyUI.openContactsDirectoryModal()" class="h-9 px-3.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 font-bold text-xs flex items-center gap-1.5 shadow-2xs active:scale-95 transition-all cursor-pointer" title="स्थायी संपर्क डायरेक्टरी देखें">
+              <span class="material-symbols-outlined text-[17px] text-indigo-700">menu_book</span>
+              <span>📖 स्थायी डायरेक्टरी (<span id="top-contacts-book-count">0</span>)</span>
+            </button>
+
             <!-- Bulk Numbers Adder Button (New General Store Inauguration) -->
             <button onclick="TelephonyUI.openBulkNumbersModal()" class="h-9 px-3.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer" title="नई किराना दुकान उद्घाटन हेतु बल्क नंबर जोड़ें">
               <span class="material-symbols-outlined text-[17px]">celebration</span>
@@ -1550,15 +1559,6 @@
   <!-- TOAST NOTIFICATION -->
   <div id="app-toast" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-primary-container text-on-primary font-label-md text-label-md shadow-xl items-center gap-2 max-w-sm text-center border border-primary-fixed/30 font-semibold"></div>
 
-  <!-- APPLICATION SCRIPTS (Versioned for instant cache busting) -->
-  <script src="/js/state.js?v=8"></script>
-  <script src="/js/khatabook.js?v=8"></script>
-  <script src="/js/inventory.js?v=8"></script>
-  <script src="/js/voice.js?v=8"></script>
-  <script src="/js/telephony.js?v=8"></script>
-  <script src="/js/sprayer.js?v=8"></script>
-  <script src="/js/app.js?v=8"></script>
-
   <!-- ========================================== -->
   <!-- MODAL: ISSUE SPRAYER MACHINE (मशीन किसान को दें) -->
   <!-- ========================================== -->
@@ -1854,13 +1854,39 @@
           </select>
         </div>
 
-        <!-- Textarea for Numbers -->
-        <div>
-          <div class="flex items-center justify-between mb-1">
-            <label class="text-xs font-bold text-slate-700">मोबाइल नंबर यहाँ पेस्ट करें या लिखें:</label>
-            <span id="bulk-numbers-counter" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">0 नंबर मिले</span>
+        <!-- Number Format Guidance Helper -->
+        <div class="p-3 bg-amber-50/80 rounded-2xl border border-amber-200 text-xs text-amber-950 flex flex-col gap-1.5 shadow-2xs">
+          <div class="flex items-center justify-between font-bold">
+            <span class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[16px] text-amber-700">info</span>
+              <span>नंबर डालने का सही फॉर्मेट (कोई भी चलेगा):</span>
+            </span>
+            <button type="button" onclick="TelephonyUI.pasteExampleNumbers()" class="text-[11px] text-amber-900 underline font-semibold hover:text-amber-950 cursor-pointer">
+              उदाहरण भरें
+            </button>
           </div>
-          <textarea id="bulk-numbers-input" oninput="TelephonyUI.parseBulkNumbersInput(this.value)" rows="5" class="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-xs font-mono font-medium text-slate-900 outline-none focus:border-amber-600 focus:bg-white transition-all" placeholder="उदाहरण:&#10;8175044956&#10;9580133593&#10;रामलाल - 9826011223&#10;मोहन 9123456780, 9876543210"></textarea>
+          <div class="grid grid-cols-2 gap-1 text-[11px] text-slate-700 bg-white/90 p-2 rounded-xl border border-amber-100">
+            <div>• केवल नंबर: <code class="bg-slate-100 px-1 rounded text-slate-900 font-mono">9876543210</code></div>
+            <div>• +91 सहित: <code class="bg-slate-100 px-1 rounded text-slate-900 font-mono">+91 9876543210</code></div>
+            <div>• नाम सहित: <code class="bg-slate-100 px-1 rounded text-slate-900 font-mono">रमेश - 9876543210</code></div>
+            <div>• एक्सेल कॉपी: <code class="bg-slate-100 px-1 rounded text-slate-900 font-mono">नाम [Tab] नंबर</code></div>
+          </div>
+          <p class="text-[10px] text-amber-900 font-medium">💡 सभी नंबर हमेशा के लिए डायरेक्टरी में सुरक्षित रहेंगे। डुप्लीकेट नंबर अपने आप हट जाएंगे।</p>
+        </div>
+
+        <!-- Textarea for Numbers with Directory Loader Button -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
+            <label class="text-xs font-bold text-slate-700">मोबाइल नंबर यहाँ पेस्ट करें या लिखें:</label>
+            <div class="flex items-center gap-1.5">
+              <button type="button" onclick="TelephonyUI.loadFromContactsBookModal()" class="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 hover:bg-indigo-100 flex items-center gap-1 active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[14px] text-indigo-700">menu_book</span>
+                <span>डायरेक्टरी से लोड करें (<span id="contacts-book-count-badge">0</span>)</span>
+              </button>
+              <span id="bulk-numbers-counter" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">0 नंबर मिले</span>
+            </div>
+          </div>
+          <textarea id="bulk-numbers-input" oninput="TelephonyUI.parseBulkNumbersInput(this.value)" rows="5" class="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-xs font-mono font-medium text-slate-900 outline-none focus:border-amber-600 focus:bg-white transition-all" placeholder="उदाहरण:&#10;8175044956&#10;+91 9208321477 (राकेश वर्मा)&#10;सुरेश कुमार - 9876543210&#10;9123456780, 8877665544"></textarea>
           <p class="text-[11px] text-slate-500 mt-1">💡 आप व्हाट्सऐप, एसएमएस या एक्सेल से सीधे कॉपी करके यहाँ पेस्ट कर सकते हैं। सिस्टम स्वतः 10 अंकों के नंबर पहचान लेगा।</p>
         </div>
 
@@ -1880,6 +1906,60 @@
             <span>✓ सूची जोड़ें और कॉल लगाएं</span>
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: PERMANENT CONTACTS DIRECTORY (स्थायी संपर्क डायरेक्टरी) -->
+  <!-- ========================================== -->
+  <div class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end md:items-center justify-center p-0 md:p-4" id="modal-contacts-directory">
+    <div class="w-full max-w-lg bg-white rounded-t-3xl md:rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-10 h-10 rounded-xl bg-indigo-700 text-white flex items-center justify-center shadow-xs">
+            <span class="material-symbols-outlined text-[22px]">menu_book</span>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="font-bold text-slate-900 text-base">📖 स्थायी संपर्क डायरेक्टरी</h3>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-200 font-numeric-display" id="contacts-directory-total-count">0</span>
+            </div>
+            <p class="text-xs text-slate-500">सभी अभियानों के लिए सुरक्षित नंबर • डुप्लीकेट-मुक्त</p>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeContactsDirectoryModal()" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <!-- Search Bar inside Directory -->
+      <div class="relative w-full">
+        <span class="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">search</span>
+        <input type="text" oninput="TelephonyUI.renderContactsDirectory(this.value)" placeholder="डायरेक्टरी में नाम, नंबर या गाँव खोजें..." class="w-full h-10 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 font-medium outline-none focus:border-indigo-600 focus:bg-white transition-all"/>
+      </div>
+
+      <!-- Quick Action: Use all in current campaign -->
+      <div class="flex items-center justify-between p-3 rounded-2xl bg-indigo-50 border border-indigo-200 gap-2">
+        <div class="text-xs text-indigo-950">
+          <span class="font-bold block">अभियान में उपयोग करें</span>
+          <span class="text-[11px] text-indigo-800">इन सभी नंबरों को उद्घाटन कॉलिंग में लोड करें</span>
+        </div>
+        <button onclick="TelephonyUI.closeContactsDirectoryModal(); TelephonyUI.openBulkNumbersModal(); TelephonyUI.loadFromContactsBookModal();" class="h-9 px-3.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center gap-1 active:scale-95 shadow-xs cursor-pointer">
+          <span class="material-symbols-outlined text-[16px]">celebration</span>
+          <span>अभियान में जोड़ें</span>
+        </button>
+      </div>
+
+      <!-- Contacts List -->
+      <div class="flex flex-col gap-2 max-h-[50vh] overflow-y-auto pr-1" id="contacts-directory-list">
+        <!-- Populated dynamically by TelephonyUI.renderContactsDirectory() -->
+      </div>
+
+      <div class="pt-2 border-t border-slate-100 flex justify-end">
+        <button onclick="TelephonyUI.closeContactsDirectoryModal()" class="h-10 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
+          बंद करें
+        </button>
       </div>
     </div>
   </div>
@@ -1925,5 +2005,14 @@
       </div>
     </div>
   </div>
+
+  <!-- APPLICATION SCRIPTS (Versioned ?v=9 for instant live cache busting) -->
+  <script src="/js/state.js?v=9"></script>
+  <script src="/js/khatabook.js?v=9"></script>
+  <script src="/js/inventory.js?v=9"></script>
+  <script src="/js/voice.js?v=9"></script>
+  <script src="/js/telephony.js?v=9"></script>
+  <script src="/js/sprayer.js?v=9"></script>
+  <script src="/js/app.js?v=9"></script>
 </body>
 </html>
