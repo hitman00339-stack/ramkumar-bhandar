@@ -892,6 +892,31 @@
             <span class="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">search</span>
             <input type="text" id="telephony-search-input" oninput="TelephonyUI.handleSearch(this.value)" placeholder="नंबर या ग्राहक नाम खोजें..." class="w-full h-10 pl-9 pr-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 font-medium outline-none focus:border-emerald-600 shadow-xs"/>
           </div>
+
+          <!-- Day-wise Date Filter -->
+          <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
+            <button onclick="TelephonyUI.setQuickDateFilter('today')" class="h-10 px-2.5 rounded-xl bg-slate-100 hover:bg-indigo-100 hover:text-indigo-800 text-slate-700 text-xs font-bold border border-slate-200 transition-all cursor-pointer shadow-xs" title="आज की कॉल रिकॉर्ड्स देखें">
+              आज
+            </button>
+            <button onclick="TelephonyUI.setQuickDateFilter('yesterday')" class="h-10 px-2.5 rounded-xl bg-slate-100 hover:bg-indigo-100 hover:text-indigo-800 text-slate-700 text-xs font-bold border border-slate-200 transition-all cursor-pointer shadow-xs" title="कल की कॉल रिकॉर्ड्स देखें">
+              कल
+            </button>
+            <div class="relative flex items-center">
+              <span class="material-symbols-outlined absolute left-2.5 top-2 text-slate-400 text-[17px] pointer-events-none">calendar_today</span>
+              <input type="date" id="date-filter-input"
+                onchange="TelephonyUI.setDateFilter(this.value)"
+                class="h-10 pl-9 pr-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 font-medium outline-none focus:border-indigo-600 shadow-xs w-[145px] cursor-pointer"
+                title="कैलेंडर से दिन चुनें"
+              />
+            </div>
+            <div id="date-filter-badge"></div>
+            <button onclick="document.getElementById('date-filter-input') && (document.getElementById('date-filter-input').value = ''); TelephonyUI.setDateFilter('');"
+              id="btn-clear-date-filter"
+              class="h-10 w-9 rounded-xl bg-slate-100 hover:bg-rose-100 hover:text-rose-700 text-slate-500 flex items-center justify-center text-xs font-bold border border-slate-200 cursor-pointer shadow-xs"
+              title="तारीख फ़िल्टर हटाएं (सभी दिन)">
+              <span class="material-symbols-outlined text-[16px]">close</span>
+            </button>
+          </div>
         </div>
 
         <!-- DYNAMIC BATCH ACTIONS TOOLBAR -->

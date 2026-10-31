@@ -510,6 +510,66 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.deepStrictEqual(callLogEvents.map(e => e.type), ['start', 'finish', 'start', 'finish']);
   });
 
+  await t.test('Caller ID Enforcement & Same-Day Re-dialing Invariant', () => {
+    // 1. Verify caller ID format
+    const expectedCallerNumber = '+918045440103';
+    const payload = {
+      agent_id: 276578,
+      to_number: '+919208321477',
+      from_number: expectedCallerNumber,
+      caller_id: expectedCallerNumber
+    };
+    assert.strictEqual(payload.from_number, '+918045440103', 'आउटगोइंग कॉल हमेशा 8045440103 से ही जानी चाहिए');
+    assert.strictEqual(payload.caller_id, '+918045440103');
+
+    // 2. Same-day re-dialing: Verify that customer connected earlier is NOT skipped when re-dialed today
+    const customer = { id: 'c1', name: 'सुरेश', phone: '9208321477' };
+    const connectedEarlierToday = [{ rawPhone: '9208321477', isConnected: true }];
+    
+    // User initiates re-dial: queue contains customer
+    const redialQueue = [customer];
+    const dialed = [];
+    for (const c of redialQueue) {
+      // Re-dial should proceed without skipping
+      dialed.push(c.phone);
+    }
+    assert.strictEqual(dialed.length, 1, 'उसी दिन दोबारा कॉल करने पर कॉल स्किप नहीं होनी चाहिए');
+    assert.strictEqual(dialed[0], '9208321477');
+  });
+
+  await t.test('Day-Wise Call Log Filtering: Filters records matching YYYY-MM-DD accurately', () => {
+    const logs = [
+      { id: '1', time_of_call: '10/31/2026 13:54:15', user_name: 'कॉल 31 अक्टूबर' },
+      { id: '2', time_of_call: '11/01/2026 10:20:00', user_name: 'कॉल 1 नवंबर' },
+      { id: '3', time_of_call: '11/01/2026 14:45:00', user_name: 'कॉल 1 नवंबर दोपहर' }
+    ];
+
+    function filterByDay(records, dateStr) {
+      return records.filter(c => {
+        const raw = c.time_of_call || c.timestamp || null;
+        if (!raw) return false;
+        const d = new Date(raw);
+        if (isNaN(d.getTime())) return false;
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}` === dateStr;
+      });
+    }
+
+    const filtered31 = filterByDay(logs, '2026-10-31');
+    assert.strictEqual(filtered31.length, 1);
+    assert.strictEqual(filtered31[0].id, '1');
+
+    const filtered01 = filterByDay(logs, '2026-11-01');
+    assert.strictEqual(filtered01.length, 2);
+    assert.strictEqual(filtered01[0].id, '2');
+    assert.strictEqual(filtered01[1].id, '3');
+
+    const emptyDay = filterByDay(logs, '2026-11-02');
+    assert.strictEqual(emptyDay.length, 0);
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

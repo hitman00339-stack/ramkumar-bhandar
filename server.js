@@ -460,7 +460,8 @@ app.post('/api/ai-phone/call-customer', async (req, res) => {
         },
         body: JSON.stringify({
           agent_id: 276578,
-          to: formattedNumber,
+          to_number: formattedNumber,
+          from_number: '+918045440103',
           user_name: customerName || 'ग्राहक',
           prompt: promptText
         })
@@ -763,6 +764,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
     const cleanNumber = toNumber.replace(/\D/g, '');
     const formattedNumber = cleanNumber.startsWith('91') ? `+${cleanNumber}` : `+91${cleanNumber}`;
     const targetAgentId = parseInt(agentId, 10) || 276578; // Default to Outgoing agent
+    const FROM_NUMBER = '+918045440103'; // Always call FROM this number
 
     let omniResponse = null;
     let omniSuccess = false;
@@ -776,6 +778,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
         body: JSON.stringify({
           agent_id: targetAgentId,
           to_number: formattedNumber,
+          from_number: FROM_NUMBER,
           call_context: {
             customer_name: context?.customerName || 'किसान भाई',
             due_amount: String(context?.amount || '0'),

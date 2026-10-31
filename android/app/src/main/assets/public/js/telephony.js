@@ -6,6 +6,7 @@ const TelephonyUI = {
   currentWingFilter: 'all', // 'all' | 'krishi' | 'kirana'
   viewMode: 'spreadsheet', // 'spreadsheet' | 'split' | 'cards'
   searchQuery: '',
+  dateFilter: '', // 'YYYY-MM-DD' for day-wise filter, '' = no filter (all dates)
   cachedOmniLogs: [],
   selectedInTab: new Set(),
   activeTranscriptCall: null,
@@ -303,6 +304,44 @@ const TelephonyUI = {
     this.renderCurrentTab();
   },
 
+  setDateFilter(dateVal) {
+    this.dateFilter = (dateVal || '').trim(); // 'YYYY-MM-DD' or '' to clear
+    // Update date filter UI badge
+    const badge = document.getElementById('date-filter-badge');
+    if (badge) {
+      if (this.dateFilter) {
+        const d = new Date(this.dateFilter + 'T00:00:00');
+        const label = d.toLocaleDateString('hi-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+        badge.innerHTML = `<span class="text-[10px] font-bold bg-indigo-700 text-white px-2 py-0.5 rounded-full">${label} ✕</span>`;
+        badge.onclick = () => { document.getElementById('date-filter-input') && (document.getElementById('date-filter-input').value = ''); this.setDateFilter(''); };
+        badge.style.cursor = 'pointer';
+      } else {
+        badge.innerHTML = '';
+      }
+    }
+    this.renderCurrentTab();
+  },
+
+  setQuickDateFilter(preset) {
+    let dateStr = '';
+    const now = new Date();
+    if (preset === 'today') {
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      dateStr = `${yyyy}-${mm}-${dd}`;
+    } else if (preset === 'yesterday') {
+      const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const yyyy = y.getFullYear();
+      const mm = String(y.getMonth() + 1).padStart(2, '0');
+      const dd = String(y.getDate()).padStart(2, '0');
+      dateStr = `${yyyy}-${mm}-${dd}`;
+    }
+    const input = document.getElementById('date-filter-input');
+    if (input) input.value = dateStr;
+    this.setDateFilter(dateStr);
+  },
+
   setMobileSection(sec) {
     const tableSec = document.getElementById('section-spreadsheet-table');
     const unconnSec = document.getElementById('section-unconnected-column');
@@ -477,6 +516,7 @@ const TelephonyUI = {
         statusText: isConnected ? '✅ बात हुई' : (rawStatus === 'no-answer' ? '❌ नहीं उठा (00:00)' : (rawStatus === 'busy' ? '❌ व्यस्त (busy)' : '❌ नहीं लगा')),
         statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
         time: c.time_of_call || 'आज',
+        timestamp: c.time_of_call || c.created_at || null,
         summary: summaryText,
         transcript: c.call_conversation || '',
         audioUrl: recUrl || null
@@ -504,6 +544,7 @@ const TelephonyUI = {
         statusText: isConnected ? '✅ बात हुई' : '❌ कॉल नहीं लगी',
         statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
         time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : 'आज',
+        timestamp: c.timestamp || null,
         summary: c.responseText || 'तकादा संदेश भेजा गया',
         transcript: c.transcriptUser || c.queryText || '',
         audioUrl: null
@@ -580,6 +621,7 @@ const TelephonyUI = {
         statusText,
         statusClass,
         time: c.lastCallAt ? new Date(c.lastCallAt).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : (c.addedAt ? 'आज' : 'नया'),
+        timestamp: c.lastCallAt || c.addedAt || null,
         summary: c.summary || (isConnected ? 'उद्घाटन आमंत्रण सफल बातचीत' : (isCalling ? '📞 कॉल जारी है...' : 'किराना स्टोर उद्घाटन (4 नवंबर) आमंत्रण')),
         transcript: c.transcript || '',
         audioUrl: c.audioUrl || null,
@@ -599,6 +641,23 @@ const TelephonyUI = {
     // Filter by Shop Wing
     if (this.currentWingFilter !== 'all') {
       allCalls = allCalls.filter(c => c.shopId === this.currentWingFilter);
+    }
+
+    // Filter by Date (day-wise filter)
+    if (this.dateFilter) {
+      const filterDateStr = this.dateFilter; // 'YYYY-MM-DD'
+      allCalls = allCalls.filter(c => {
+        const ts = c.timestamp || c.time || null;
+        if (!ts) return false;
+        try {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) return false;
+          const yyyy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}` === filterDateStr;
+        } catch { return false; }
+      });
     }
 
     // Filter by Search Query
@@ -767,7 +826,40 @@ const TelephonyUI = {
       });
     });
 
+    let filteredInaugurationCalls = inaugurationCalls;
+    if (this.dateFilter) {
+      const filterDateStr = this.dateFilter;
+      filteredInaugurationCalls = inaugurationCalls.filter(c => {
+        const ts = c.timestamp || c.time || null;
+        if (!ts) return false;
+        try {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) return false;
+          const yyyy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}` === filterDateStr;
+        } catch { return false; }
+      });
+    }
+
     let totalAllList = Array.from(masterMap.values());
+    if (this.dateFilter) {
+      const filterDateStr = this.dateFilter;
+      totalAllList = totalAllList.filter(c => {
+        const ts = c.timestamp || c.lastCallDate || c.updatedAt || c.time || null;
+        if (!ts) return false;
+        try {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) return false;
+          const yyyy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}` === filterDateStr;
+        } catch { return false; }
+      });
+    }
+
     if (this.searchQuery) {
       totalAllList = totalAllList.filter(c =>
         (c.cleanPhone && c.cleanPhone.includes(this.searchQuery)) ||
@@ -783,7 +875,7 @@ const TelephonyUI = {
       failedCalls,
       pendingCustomers,
       totalAllList,
-      inaugurationCalls
+      inaugurationCalls: filteredInaugurationCalls
     };
   },
 
@@ -1902,15 +1994,9 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const total = this.autoDialQueue.length;
     const currentNum = this.autoDialCurrentIndex + 1;
 
-    // Skip if customer is already connected in the meantime
-    const { connectedCalls } = this.getProcessedData();
-    const isAlreadyConnected = connectedCalls.some(c => (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone);
-    if (isAlreadyConnected) {
-      console.log(`Skipping already connected customer: ${currentCustomer.name} (${cleanPhone})`);
-      this.autoDialCurrentIndex++;
-      this.processNextAutoDial();
-      return;
-    }
+    // NOTE: Same-day re-calling is ALLOWED by design.
+    // We only skip if the campaign entry is already marked 'connected' (manual override or prior session).
+    // Do NOT skip based on the live connectedCalls set — user may intentionally retry today.
 
     // Update Banner UI - Stage 1: Initiating call
     const progressEl = document.getElementById('calling-banner-progress');
