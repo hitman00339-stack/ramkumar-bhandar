@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ramkumar-bhandar-v13-strict-live';
+const CACHE_NAME = 'ramkumar-bhandar-v14-strict-live';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/css/app.css',

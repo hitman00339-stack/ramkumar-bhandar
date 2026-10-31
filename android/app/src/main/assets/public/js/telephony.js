@@ -3042,7 +3042,6 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     this.closeCustomerProfileModal();
     this.redialCustomer(phone, name);
   }
-  }
 };
 
 window.TelephonyUI = TelephonyUI;

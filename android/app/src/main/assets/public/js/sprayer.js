@@ -476,7 +476,7 @@ const SprayerUI = {
 
   // High-contrast clean QR Code SVG pattern generator
   generateQrSvg(text) {
-    return \`
+    return `
       <div class="flex flex-col items-center justify-center p-4 bg-white border-2 border-slate-900 rounded-2xl shadow-sm text-center">
         <div class="text-[11px] font-bold text-slate-800 uppercase tracking-widest mb-1">रामकुमार खाद भंडार</div>
         <div class="p-2 bg-white rounded-xl border border-slate-300">
@@ -518,10 +518,10 @@ const SprayerUI = {
             <rect x="78" y="82" width="8" height="8" fill="#000"/>
           </svg>
         </div>
-        <div class="mt-2 font-mono font-extrabold text-sm text-slate-900">\${text}</div>
+        <div class="mt-2 font-mono font-extrabold text-sm text-slate-900">${text}</div>
         <div class="text-[10px] text-slate-500 font-semibold mt-0.5">स्प्रेयर मशीन स्टिकर • स्कैन करें</div>
       </div>
-    \`;
+    `;
   },
 
   // ----------------------------------------------------

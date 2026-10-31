@@ -4,7 +4,7 @@
   <script>
     // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
     (function() {
-      const CURRENT_VER = 'rb_v13_20261101_live';
+      const CURRENT_VER = 'rb_v14_20261101_live';
       if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
         localStorage.setItem('rb_active_version', CURRENT_VER);
         if ('caches' in window) {
@@ -2119,13 +2119,13 @@
     </div>
   </div>
 
-  <!-- APPLICATION SCRIPTS (Versioned ?v=13 for instant live cache busting) -->
-  <script src="/js/state.js?v=13"></script>
-  <script src="/js/khatabook.js?v=13"></script>
-  <script src="/js/inventory.js?v=13"></script>
-  <script src="/js/voice.js?v=13"></script>
-  <script src="/js/telephony.js?v=13"></script>
-  <script src="/js/sprayer.js?v=13"></script>
-  <script src="/js/app.js?v=13"></script>
+  <!-- APPLICATION SCRIPTS (Versioned ?v=14 for instant live cache busting) -->
+  <script src="/js/state.js?v=14"></script>
+  <script src="/js/khatabook.js?v=14"></script>
+  <script src="/js/inventory.js?v=14"></script>
+  <script src="/js/voice.js?v=14"></script>
+  <script src="/js/telephony.js?v=14"></script>
+  <script src="/js/sprayer.js?v=14"></script>
+  <script src="/js/app.js?v=14"></script>
 </body>
 </html>
