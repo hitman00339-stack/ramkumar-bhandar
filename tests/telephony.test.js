@@ -516,11 +516,15 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     const payload = {
       agent_id: 276578,
       to_number: '+919208321477',
+      from_number_id: 8484,
       from_number: expectedCallerNumber,
-      caller_id: expectedCallerNumber
+      caller_id: expectedCallerNumber,
+      phone_number: expectedCallerNumber
     };
     assert.strictEqual(payload.from_number, '+918045440103', 'आउटगोइंग कॉल हमेशा 8045440103 से ही जानी चाहिए');
+    assert.strictEqual(payload.from_number_id, 8484, 'आउटगोइंग कॉल हेतु ऑम्नीडायमेंशन फोन नंबर ID 8484 होना अनिवार्य है');
     assert.strictEqual(payload.caller_id, '+918045440103');
+    assert.strictEqual(payload.phone_number, '+918045440103');
 
     // 2. Same-day re-dialing: Verify that customer connected earlier is NOT skipped when re-dialed today
     const customer = { id: 'c1', name: 'सुरेश', phone: '9208321477' };

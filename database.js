@@ -61,8 +61,11 @@ class Database {
           this.data.sprayerHistory = [];
           needsSave = true;
         }
-        if (!this.data.contactsBook) {
+        if (!this.data.contactsBook || this.data.contactsBook.length === 0) {
           this.data.contactsBook = [];
+          if (this.data.omnidimLogsCache && this.data.omnidimLogsCache.length > 0) {
+            this.recordCallHistoryFromLogs(this.data.omnidimLogsCache, { autoHarvestInbound: true });
+          }
           needsSave = true;
         }
         if (!this.data.campaignContacts) {
@@ -1364,12 +1367,12 @@ class Database {
       }
 
       const isInbound = log.call_direction === 'inbound';
-      const onlyIfExisting = isInbound ? !autoHarvestInbound : true;
+      const onlyIfExisting = false; // Always preserve every customer number (incoming & outgoing) in permanent directory!
 
       const contact = this.recordCallInteraction({
         cleanPhone: clean,
         phone: rawPhone,
-        name: log.user_name || 'ग्रामवासी / ग्राहक',
+        name: (log.user_name || log.customer_name || 'ग्रामवासी / ग्राहक').trim(),
         direction: log.call_direction || 'inbound',
         durationSec,
         status,

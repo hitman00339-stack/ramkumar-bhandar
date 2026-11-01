@@ -565,14 +565,23 @@ const TelephonyUI = {
     // 4. Inauguration Campaign Contacts (With Automatic Incoming Callback Resolution)
     const inaugurationCalls = (this.campaignContacts || []).map(c => {
       const cleanPhone = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
-      const customerCalledBack = cleanPhone && connectedPhoneSet.has(cleanPhone);
+      const failTime = c.lastCallAt ? new Date(c.lastCallAt).getTime() : 0;
+
+      // Callback is ONLY valid if an incoming/connected call happened AFTER this call attempt failed!
+      const customerCalledBack = failTime > 0 && allCalls.some(call => {
+        const cp = (call.rawPhone || call.phone || '').replace(/\D/g, '').slice(-10);
+        if (cp !== cleanPhone) return false;
+        if (!call.isConnected) return false;
+        const ct = new Date(call.timestamp || call.time || 0).getTime();
+        return ct > (failTime + 2000);
+      });
 
       let isConnected = c.status === 'connected' || customerCalledBack;
-      let isFailed = c.status === 'failed' && !customerCalledBack; // Suppressed if customer called back!
+      let isFailed = c.status === 'failed' && !customerCalledBack; // Only suppressed if customer actually called back AFTER failure
       let isCalling = c.status === 'calling';
       let isPending = !isConnected && !isFailed && !isCalling;
 
-      // Auto-sync status back to database if customer connected or called back
+      // Auto-sync status back to database ONLY if customer connected or called back AFTER failure
       if (customerCalledBack && c.status !== 'connected' && cleanPhone) {
         c.status = 'connected';
         fetch('/api/campaign/update-status', {
@@ -694,17 +703,26 @@ const TelephonyUI = {
     for (const c of allCalls) {
       if (!c.isFailed) continue;
       const clean = (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      if (!clean || clean.length !== 10) continue;
 
-      // CRITICAL: If customer has connected or called back, REMOVE FROM FAILED CALLS!
-      if (clean && connectedPhoneSet.has(clean)) {
-        continue;
+      const failTime = new Date(c.timestamp || c.lastCallAt || c.time || 0).getTime();
+
+      // Check if ANY connected call or callback occurred AFTER this failed call
+      const resolvedLater = failTime > 0 && allCalls.some(other => {
+        const otherClean = (other.rawPhone || other.phone || '').replace(/\D/g, '').slice(-10);
+        if (otherClean !== clean) return false;
+        if (!other.isConnected) return false;
+        const otherTime = new Date(other.timestamp || other.time || 0).getTime();
+        return otherTime > (failTime + 2000);
+      });
+
+      if (resolvedLater) {
+        continue; // Customer resolved / connected later
       }
 
       // Deduplicate so same phone does not appear multiple times in the redial list
-      if (clean && clean.length === 10) {
-        if (seenFailedPhones.has(clean)) continue;
-        seenFailedPhones.add(clean);
-      }
+      if (seenFailedPhones.has(clean)) continue;
+      seenFailedPhones.add(clean);
       failedCalls.push(c);
     }
 
@@ -2075,7 +2093,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           const matchingLog = logs.find(l => {
             const toClean = (l.to_number || '').replace(/\D/g, '');
             const fromClean = (l.from_number || '').replace(/\D/g, '');
-            return toClean.endsWith(cleanPhone) || fromClean.endsWith(cleanPhone);
+            if (!toClean.endsWith(cleanPhone) && !fromClean.endsWith(cleanPhone)) return false;
+            // Only accept logs created at or near this dial attempt!
+            const logTime = new Date(l.time_of_call || l.created_at || 0).getTime();
+            if (logTime && logTime < (startTime - 15000)) return false;
+            return true;
           });
 
           if (matchingLog) {
@@ -2298,10 +2320,60 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       const res = await fetch('/api/contacts-book');
       if (res.ok) {
         const data = await res.json();
-        this.contactsBook = data.contacts || [];
-        try {
-          localStorage.setItem('rb_cached_contacts_book', JSON.stringify(this.contactsBook));
-        } catch (e) {}
+        const serverContacts = data.contacts || [];
+
+        // Two-way Permanent Persistence:
+        if (serverContacts.length > 0) {
+          const merged = [...serverContacts];
+          (this.contactsBook || []).forEach(localC => {
+            if (!merged.some(m => m.cleanPhone === localC.cleanPhone)) {
+              merged.push(localC);
+            }
+          });
+          this.contactsBook = merged;
+          try {
+            localStorage.setItem('rb_cached_contacts_book', JSON.stringify(this.contactsBook));
+          } catch (e) {}
+
+          // If client has extra numbers, re-sync to server
+          if (this.contactsBook.length > serverContacts.length) {
+            fetch('/api/contacts-book', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contacts: this.contactsBook, campaign: 'स्थायी डायरेक्टरी' })
+            }).catch(console.warn);
+          }
+        } else if (this.contactsBook && this.contactsBook.length > 0) {
+          // Server was empty (e.g. freshly rebooted container), re-seed server from client storage!
+          fetch('/api/contacts-book', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: this.contactsBook, campaign: 'स्थायी डायरेक्टरी' })
+          }).catch(console.warn);
+        } else {
+          // If contactsBook is completely empty, populate from master totalAllList so numbers are never 0
+          const { totalAllList } = this.getProcessedData();
+          if (totalAllList && totalAllList.length > 0) {
+            this.contactsBook = totalAllList.map(item => ({
+              id: item.id || ('cont_' + item.cleanPhone),
+              name: item.customerName || 'ग्रामवासी / ग्राहक',
+              cleanPhone: item.cleanPhone,
+              phone: item.phone,
+              village: item.village || '',
+              campaigns: ['मास्टर डायरेक्टरी'],
+              createdAt: new Date().toISOString()
+            }));
+            try {
+              localStorage.setItem('rb_cached_contacts_book', JSON.stringify(this.contactsBook));
+            } catch (e) {}
+            fetch('/api/contacts-book', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contacts: this.contactsBook, campaign: 'मास्टर डायरेक्टरी' })
+            }).catch(console.warn);
+          }
+        }
+
         this.updateContactsBookBadges();
         this.renderCurrentTab();
       }
@@ -2319,7 +2391,18 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   },
 
   loadFromContactsBookModal() {
-    if (!this.contactsBook || this.contactsBook.length === 0) {
+    let sourceList = this.contactsBook || [];
+    if (sourceList.length === 0) {
+      const { totalAllList } = this.getProcessedData();
+      if (totalAllList && totalAllList.length > 0) {
+        sourceList = totalAllList.map(item => ({
+          cleanPhone: item.cleanPhone,
+          phone: item.phone,
+          name: item.customerName
+        }));
+      }
+    }
+    if (sourceList.length === 0) {
       alert('डायरेक्टरी में अभी कोई सुरक्षित नंबर नहीं है। नीचे दिए गए टेक्स्ट एरिया में नंबर दर्ज करें, वे स्वतः डायरेक्टरी में हमेशा के लिए सुरक्षित हो जाएंगे।');
       return;
     }
@@ -2327,17 +2410,18 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     if (!input) return;
 
     // Load formatted list: Name - Clean 10 digits
-    const lines = this.contactsBook.map(c => {
+    const lines = sourceList.map(c => {
       const clean = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
-      if (c.name && c.name !== 'ग्रामवासी / ग्राहक') {
-        return `${c.name} - ${clean}`;
+      const name = c.name || c.customerName;
+      if (name && name !== 'ग्रामवासी / ग्राहक') {
+        return `${name} - ${clean}`;
       }
       return clean;
     });
 
     input.value = lines.join('\n');
     this.parseBulkNumbersInput(input.value);
-    AppState.showToast(`📖 डायरेक्टरी से ${this.contactsBook.length} सुरक्षित नंबर लोड किए गए`);
+    AppState.showToast(`📖 डायरेक्टरी से ${sourceList.length} सुरक्षित नंबर लोड किए गए`);
   },
 
   pasteExampleNumbers() {
@@ -2368,15 +2452,30 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const countEl = document.getElementById('contacts-directory-total-count');
     if (!listEl) return;
 
+    let baseList = this.contactsBook || [];
+    if (baseList.length === 0) {
+      const { totalAllList } = this.getProcessedData();
+      if (totalAllList && totalAllList.length > 0) {
+        baseList = totalAllList.map(t => ({
+          id: t.id,
+          name: t.customerName || 'ग्रामवासी / ग्राहक',
+          cleanPhone: t.cleanPhone,
+          phone: t.phone,
+          village: t.village || '',
+          campaigns: [t.source || 'सुरक्षित नंबर']
+        }));
+      }
+    }
+
     const query = (filterText || '').toLowerCase().trim();
-    const contacts = (this.contactsBook || []).filter(c => {
+    const contacts = baseList.filter(c => {
       if (!query) return true;
       return (c.name && c.name.toLowerCase().includes(query)) ||
              (c.cleanPhone && c.cleanPhone.includes(query)) ||
              (c.village && c.village.toLowerCase().includes(query));
     });
 
-    if (countEl) countEl.innerText = this.contactsBook ? this.contactsBook.length : 0;
+    if (countEl) countEl.innerText = baseList.length;
 
     if (contacts.length === 0) {
       listEl.innerHTML = `
@@ -2445,10 +2544,20 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       const res = await fetch('/api/campaign/contacts');
       if (res.ok) {
         const data = await res.json();
-        this.campaignContacts = data.contacts || [];
-        try {
-          localStorage.setItem('rb_cached_campaign_contacts', JSON.stringify(this.campaignContacts));
-        } catch (e) {}
+        const serverContacts = data.contacts || [];
+        if (serverContacts.length > 0) {
+          this.campaignContacts = serverContacts;
+          try {
+            localStorage.setItem('rb_cached_campaign_contacts', JSON.stringify(this.campaignContacts));
+          } catch (e) {}
+        } else if (this.campaignContacts && this.campaignContacts.length > 0) {
+          // Re-hydrate server if container restarted
+          fetch('/api/campaign/contacts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: this.campaignContacts, campaign: 'उद्घाटन आमंत्रण' })
+          }).catch(console.warn);
+        }
         const bInaug = document.getElementById('badge-count-inauguration');
         if (bInaug) bInaug.innerText = this.campaignContacts.length;
         this.renderCurrentTab();
@@ -2493,10 +2602,42 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       if (!res.ok) throw new Error(data.error || 'नंबर सहेजने में विफल');
 
       this.campaignContacts = data.contacts || [];
+      try {
+        localStorage.setItem('rb_cached_campaign_contacts', JSON.stringify(this.campaignContacts));
+      } catch (e) {}
+
+      // IMMEDIATELY ADD TO PERMANENT DIRECTORY (स्थायी डायरेक्टरी)
+      if (!this.contactsBook) this.contactsBook = [];
+      contacts.forEach(c => {
+        const clean = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (clean.length === 10 && !this.contactsBook.some(existing => existing.cleanPhone === clean)) {
+          this.contactsBook.push({
+            id: 'cont_' + clean,
+            name: (c.name || 'ग्रामवासी / ग्राहक').trim(),
+            cleanPhone: clean,
+            phone: c.phone || (`+91 ${clean.slice(0, 5)} ${clean.slice(5)}`),
+            village: c.village || '',
+            campaigns: [campaignName],
+            createdAt: new Date().toISOString()
+          });
+        }
+      });
+      try {
+        localStorage.setItem('rb_cached_contacts_book', JSON.stringify(this.contactsBook));
+      } catch (e) {}
+      this.updateContactsBookBadges();
+
+      // Also persist to contacts-book API
+      fetch('/api/contacts-book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts: this.contactsBook, campaign: campaignName })
+      }).catch(console.warn);
+
       this.closeBulkNumbersModal();
       if (input) input.value = '';
 
-      AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर सफलतापूर्वक जोड़े गए!`);
+      AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर डायरेक्टरी व अभियान में स्थायी सुरक्षित किए गए!`);
       this.switchCallTab('inauguration');
 
       // Sequential auto-calling confirmation
@@ -2646,7 +2787,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         const matchingLog = logs.find(l => {
           const toClean = (l.to_number || '').replace(/\D/g, '');
           const fromClean = (l.from_number || '').replace(/\D/g, '');
-          return toClean.endsWith(contact.cleanPhone) || fromClean.endsWith(contact.cleanPhone);
+          if (!toClean.endsWith(contact.cleanPhone) && !fromClean.endsWith(contact.cleanPhone)) return false;
+          // Only accept logs created at or near this dial attempt!
+          const logTime = new Date(l.time_of_call || l.created_at || 0).getTime();
+          if (logTime && logTime < (startTime - 15000)) return false;
+          return true;
         });
 
         if (matchingLog) {
@@ -2901,7 +3046,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
       AppState.showToast(`✓ AI कॉल का निर्देश भेजा गया: ${phone}`);
       this.closeManualOutboundModal();
-      setTimeout(() => this.fetchLiveOmnidimLogs(), 1500);
+      // Multi-stage polling to capture call result whether connected or failed
+      [2000, 6000, 15000, 30000, 60000].forEach(delay => {
+        setTimeout(() => this.fetchLiveOmnidimLogs(true), delay);
+      });
     } catch (err) {
       alert('त्रुटि: ' + err.message);
     } finally {

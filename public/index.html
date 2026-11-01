@@ -4,15 +4,10 @@
   <script>
     // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
     (function() {
-      const CURRENT_VER = 'rb_v15_20261101_live';
+      const CURRENT_VER = 'rb_v16_20261101_live';
       if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
         localStorage.setItem('rb_active_version', CURRENT_VER);
-        // Clean out all old cached dummy records so fresh server state displays immediately
-        localStorage.removeItem('rb_customers');
-        localStorage.removeItem('rb_transactions');
-        localStorage.removeItem('rb_cached_contacts_book');
-        localStorage.removeItem('rb_cached_campaign_contacts');
-        localStorage.removeItem('rb_cached_omni_logs');
+        // Do NOT remove user contacts or transactions - preserve them permanently!
         if ('caches' in window) {
           caches.keys().then(function(names) {
             for (let name of names) {

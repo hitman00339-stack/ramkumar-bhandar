@@ -461,11 +461,24 @@ app.post('/api/ai-phone/call-customer', async (req, res) => {
         body: JSON.stringify({
           agent_id: 276578,
           to_number: formattedNumber,
+          from_number_id: 8484,
           from_number: '+918045440103',
+          caller_id: '+918045440103',
+          phone_number: '+918045440103',
           user_name: customerName || 'ग्राहक',
           prompt: promptText
         })
       });
+      // Permanently save dialed number in contacts directory
+      const clean10 = formattedNumber.replace(/\D/g, '').slice(-10);
+      if (clean10.length === 10) {
+        db.saveContactToBook({
+          cleanPhone: clean10,
+          phone: formattedNumber,
+          name: customerName || 'ग्रामवासी / ग्राहक',
+          campaign: 'आउटगोइंग कॉल'
+        });
+      }
       if (omniRes.ok) {
         const omniData = await omniRes.json();
         omniDispatched = true;
@@ -644,6 +657,17 @@ app.post('/api/ai-phone/webhook', verifyTelephonyAuth, (req, res) => {
       statusLabel: isUrgent ? 'वापस फोन करें (जरूरी)' : 'सफल बात'
     });
 
+    // Permanently preserve incoming caller in contacts directory
+    const cleanInbound = (caller || '').replace(/\D/g, '').slice(-10);
+    if (cleanInbound.length === 10 && cleanInbound !== '8045440103') {
+      db.saveContactToBook({
+        cleanPhone: cleanInbound,
+        phone: caller.includes('+91') ? caller : `+91 ${cleanInbound.slice(0, 5)} ${cleanInbound.slice(5)}`,
+        name: CustomerName || 'इनकमिंग किसान / ग्राहक',
+        campaign: 'इनकमिंग पूछताछ'
+      });
+    }
+
     res.json({
       success: true,
       shopId,
@@ -711,7 +735,7 @@ async function syncAllOmnidimLogs() {
     }
 
     if (allLogs.length > 0) {
-      db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: false });
+      db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: true });
       console.log(`[Omnidim Sync] Successfully ingested ${allLogs.length} call logs into master directory.`);
     }
   } catch (err) {
@@ -763,8 +787,20 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     const cleanNumber = toNumber.replace(/\D/g, '');
     const formattedNumber = cleanNumber.startsWith('91') ? `+${cleanNumber}` : `+91${cleanNumber}`;
-    const targetAgentId = parseInt(agentId, 10) || 276578; // Default to Outgoing agent
+    const targetAgentId = parseInt(agentId, 10) || 276578; // Default to Outgoing agent (Ramkumar Khad Bhandar Kuwargaddi — Outgoing)
     const FROM_NUMBER = '+918045440103'; // Always call FROM this number
+    const FROM_NUMBER_ID = 8484; // Exact Omnidimension phone number ID for +918045440103
+
+    // Permanently preserve number in contacts directory immediately upon dispatch
+    const cleanLast10 = cleanNumber.slice(-10);
+    if (cleanLast10.length === 10 && cleanLast10 !== '8045440103') {
+      db.saveContactToBook({
+        cleanPhone: cleanLast10,
+        phone: formattedNumber,
+        name: context?.customerName || 'ग्रामवासी / ग्राहक',
+        campaign: 'आउटगोइंग कॉल'
+      });
+    }
 
     let omniResponse = null;
     let omniSuccess = false;
@@ -778,7 +814,10 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
         body: JSON.stringify({
           agent_id: targetAgentId,
           to_number: formattedNumber,
+          from_number_id: FROM_NUMBER_ID,
           from_number: FROM_NUMBER,
+          caller_id: FROM_NUMBER,
+          phone_number: FROM_NUMBER,
           call_context: {
             customer_name: context?.customerName || 'किसान भाई',
             due_amount: String(context?.amount || '0'),
