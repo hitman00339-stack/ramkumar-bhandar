@@ -1856,8 +1856,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     let toCall = [];
 
     if (this.selectedInTab.size > 0) {
-      // Find items in either calls or pending customers or total list
-      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList];
+      // Find items in ALL sources including inauguration campaign contacts
+      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList, ...(data.inaugurationCalls || [])];
       // Deduplicate by ID
       const seenIds = new Set();
       const uniqueSources = allSources.filter(item => {
@@ -1870,8 +1870,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         id: c.id,
         name: c.customerName || c.name || 'ग्राहक',
         phone: c.rawPhone || c.phone,
+        cleanPhone: c.rawPhone || (c.phone || '').replace(/\D/g, '').slice(-10),
         due: c.dueAmount || c.due || 0,
-        shopId: c.shopId || AppState.currentShopId
+        shopId: c.shopId || AppState.currentShopId,
+        campaign: c.isCampaign ? 'inauguration' : undefined
       })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
     } else if (this.currentCallTab === 'failed') {
       toCall = data.failedCalls.map(c => ({
@@ -1909,7 +1911,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       return;
     }
 
-    if (this.currentCallTab === 'inauguration') {
+    if (this.currentCallTab === 'inauguration' || toCall.some(c => c.campaign === 'inauguration')) {
       if (confirm(`क्या आप उद्घाटन आमंत्रण हेतु चुने हुए ${toCall.length} नंबरों पर एक-एक करके बैकग्राउंड AI कॉलिंग शुरू करना चाहते हैं?`)) {
         this.selectedInTab.clear();
         this.startSequentialCampaignDial(toCall);
