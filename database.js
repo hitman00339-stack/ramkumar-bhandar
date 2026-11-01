@@ -1209,7 +1209,9 @@ class Database {
     audioUrl = null,
     campaign = null,
     notes = null,
-    onlyIfExisting = false
+    onlyIfExisting = false,
+    id = null,
+    callTime = null
   }) {
     if (!this.data.contactsBook) this.data.contactsBook = [];
     const clean = (cleanPhone || phone || '').replace(/\D/g, '').slice(-10);
@@ -1246,8 +1248,9 @@ class Database {
 
     if (!contact) return null;
 
-    const now = new Date().toISOString();
-    contact.totalCalls = (contact.totalCalls || 0) + 1;
+    const now = callTime || new Date().toISOString();
+    const historyId = id ? (String(id).startsWith('omni_') ? String(id) : 'omni_' + id) : ('hist_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
+
     contact.lastCallDate = now;
     contact.lastCallDirection = direction;
     contact.lastCallStatus = status;
@@ -1260,16 +1263,18 @@ class Database {
     if (notes) contact.personalData.notes = notes;
 
     if (!contact.callHistory) contact.callHistory = [];
-    // Avoid duplicate history entries by timestamp/summary
+    // Avoid duplicate history entries by timestamp/summary or ID
     const isDuplicate = contact.callHistory.some(h => 
-      h.direction === direction && 
-      Math.abs(new Date(h.date || 0) - new Date(now)) < 5000
+      (id && (h.id === historyId || h.id === String(id) || h.id === 'omni_' + id)) ||
+      (h.direction === direction && Math.abs(new Date(h.rawTime || h.date || 0) - new Date(now)) < 15000)
     );
 
     if (!isDuplicate) {
+      contact.totalCalls = (contact.totalCalls || 0) + 1;
       contact.callHistory.unshift({
-        id: 'hist_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+        id: historyId,
         date: now,
+        rawTime: now,
         direction,
         status,
         durationSec,
@@ -1370,6 +1375,8 @@ class Database {
       const onlyIfExisting = false; // Always preserve every customer number (incoming & outgoing) in permanent directory!
 
       const contact = this.recordCallInteraction({
+        id: log.id,
+        callTime: log.time_of_call,
         cleanPhone: clean,
         phone: rawPhone,
         name: (log.user_name || log.customer_name || 'ग्रामवासी / ग्राहक').trim(),
@@ -1406,7 +1413,129 @@ class Database {
   getContactProfile(cleanPhone) {
     if (!this.data.contactsBook) return null;
     const clean = cleanPhone.replace(/\D/g, '').slice(-10);
-    return this.data.contactsBook.find(c => c.cleanPhone === clean) || null;
+    let contact = this.data.contactsBook.find(c => c.cleanPhone === clean);
+    if (!contact) {
+      const rawFormatted = `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+      contact = this.saveContactToBook({ cleanPhone: clean, phone: rawFormatted, name: 'ग्रामवासी / ग्राहक' });
+    }
+    if (!contact) return null;
+
+    // Dynamically query all real matching calls from Omnidim cache and local logs
+    const matchingOmni = (this.data.omnidimLogsCache || []).filter(l => {
+      const to = (l.to_number || '').replace(/\D/g, '').slice(-10);
+      const from = (l.from_number || '').replace(/\D/g, '').slice(-10);
+      return to === clean || from === clean;
+    });
+
+    const matchingLocal = (this.data.callLogs || []).filter(l => {
+      const p = (l.callerNumber || l.phone || '').replace(/\D/g, '').slice(-10);
+      return p === clean;
+    });
+
+    const historyList = [];
+    const seenIds = new Set();
+
+    matchingOmni.forEach(l => {
+      if (l.id && (seenIds.has(String(l.id)) || seenIds.has('omni_' + l.id))) return;
+      if (l.id) {
+        seenIds.add(String(l.id));
+        seenIds.add('omni_' + l.id);
+      }
+
+      const durationSec = (l.call_duration_in_minutes || 0) * 60 + (l.call_duration_in_seconds || 0);
+      const rawStatus = (l.call_status || '').toLowerCase();
+      const status = rawStatus === 'completed' ? (durationSec > 0 ? 'completed' : 'failed') : 'failed';
+      let recUrl = l.internal_recording_url || l.recording_url;
+      if (recUrl && recUrl.startsWith('/')) recUrl = 'https://omnidim.io' + recUrl;
+
+      let summary = l.sentiment_analysis_details || l.call_summary || '';
+      if (!summary && l.call_conversation) {
+        const lines = l.call_conversation.split(/<br\s*\/?>|\n/).map(s => s.trim()).filter(Boolean);
+        const userLine = lines.find(s => s.toLowerCase().startsWith('user:') || s.toLowerCase().startsWith('caller:'));
+        if (userLine) summary = `पूछताछ: "${userLine.replace(/^(user:|caller:)/i, '').trim().substring(0, 80)}"`;
+      }
+      if (!summary) {
+        summary = status === 'completed' ? 'सफल बातचीत' : (rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा' : (rawStatus === 'busy' ? 'फोन व्यस्त था' : 'कॉल नहीं लगी'));
+      }
+
+      // Convert UTC timestamp to Indian locale format
+      let formattedDate = l.time_of_call || 'आज';
+      try {
+        if (l.time_of_call) {
+          const utcMs = new Date(l.time_of_call + ' UTC').getTime();
+          if (!isNaN(utcMs)) {
+            const d = new Date(utcMs);
+            formattedDate = d.toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' });
+          }
+        }
+      } catch (e) {}
+
+      historyList.push({
+        id: 'omni_' + (l.id || Math.random()),
+        date: formattedDate,
+        rawTime: l.time_of_call,
+        direction: l.call_direction || 'outbound',
+        status,
+        rawStatus,
+        durationSec,
+        durationStr: `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}`,
+        summary,
+        transcript: l.call_conversation || '',
+        audioUrl: recUrl || null
+      });
+    });
+
+    matchingLocal.forEach(l => {
+      const id = 'local_' + l.id;
+      if (seenIds.has(id)) return;
+      seenIds.add(id);
+
+      const durationSec = l.durationSec || 0;
+      historyList.push({
+        id,
+        date: l.timestamp ? new Date(l.timestamp).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' }) : 'आज',
+        rawTime: l.timestamp,
+        direction: l.direction || 'outbound',
+        status: l.status === 'completed' ? 'completed' : 'failed',
+        rawStatus: l.status,
+        durationSec,
+        durationStr: `${String(Math.floor(durationSec / 60)).padStart(2, '0')}:${String(durationSec % 60).padStart(2, '0')}`,
+        summary: l.responseText || 'आउटबाउंड कॉल',
+        transcript: l.transcriptUser || '',
+        audioUrl: null
+      });
+    });
+
+    (contact.callHistory || []).forEach(h => {
+      const hidStr = String(h.id || '');
+      const rawId = hidStr.replace(/^omni_/, '');
+      if (seenIds.has(hidStr) || (rawId && seenIds.has(rawId))) return;
+      seenIds.add(hidStr);
+      if (rawId) seenIds.add(rawId);
+
+      // Deduplicate if already matched an omni record (same direction and within 120s)
+      const hTime = new Date(h.rawTime || h.date || 0).getTime();
+      if (!isNaN(hTime) && hTime > 0) {
+        const isAlreadyRepresented = historyList.some(item => {
+          if (item.direction !== h.direction) return false;
+          const itemTime = new Date(item.rawTime || item.date || 0).getTime();
+          return !isNaN(itemTime) && Math.abs(itemTime - hTime) < 120000;
+        });
+        if (isAlreadyRepresented) return;
+      }
+
+      historyList.push(h);
+    });
+
+    // Return profile with exact call counts and full chronological history
+    return {
+      ...contact,
+      totalCalls: historyList.length,
+      callHistory: historyList,
+      lastCallStatus: historyList[0]?.status || contact.lastCallStatus || 'pending',
+      lastCallDate: historyList[0]?.date || contact.lastCallDate || 'आज',
+      lastDurationSec: historyList[0]?.durationSec || contact.lastDurationSec || 0
+    };
   }
 }
 

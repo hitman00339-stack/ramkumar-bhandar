@@ -862,6 +862,102 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5.0.0.1 ULTRA-FAST REAL-TIME CALL STATUS CHECK
+// Used by sequential campaign & batch dialers to detect call end within 2-3s
+// ----------------------------------------------------
+app.get('/api/omnidim/call-status/:phone', async (req, res) => {
+  try {
+    const raw = req.params.phone || '';
+    const clean = raw.replace(/\D/g, '').slice(-10);
+    if (clean.length !== 10) {
+      return res.status(400).json({ success: false, error: 'अमान्य मोबाइल नंबर' });
+    }
+
+    const { since, requestId } = req.query;
+    const sinceMs = since ? parseInt(since, 10) : null;
+
+    // Fetch latest 15 logs directly from Omnidimension
+    let latestLogs = [];
+    try {
+      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=15`, {
+        headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        latestLogs = data.call_log_data || [];
+        if (latestLogs.length > 0) {
+          db.recordCallHistoryFromLogs(latestLogs, { autoHarvestInbound: true });
+        }
+      }
+    } catch (e) {
+      console.warn('Fast call-status fetch error:', e.message);
+    }
+
+    const allLogs = latestLogs.length > 0 ? latestLogs : (db.data.omnidimLogsCache || []);
+    
+    // Find matching log for this phone number
+    const matchingLog = allLogs.find(l => {
+      const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
+      const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
+      if (toClean !== clean && fromClean !== clean) return false;
+
+      // 1. If requestId was supplied and log has call_request_id, match exactly
+      if (requestId && l.call_request_id && l.call_request_id.id) {
+        if (String(l.call_request_id.id) === String(requestId)) {
+          return true;
+        }
+      }
+
+      // 2. If since was supplied, verify log was created at or after dispatch
+      if (sinceMs && l.time_of_call) {
+        const logUtcMs = new Date(l.time_of_call + ' UTC').getTime();
+        if (!isNaN(logUtcMs) && !isNaN(sinceMs)) {
+          // If log is older than 25 seconds before dispatch, it belongs to an earlier call
+          if (logUtcMs < (sinceMs - 25000)) return false;
+        }
+      }
+
+      return true;
+    });
+
+    if (!matchingLog) {
+      return res.json({
+        success: true,
+        ended: false,
+        status: 'calling',
+        message: 'कॉल जारी है / घंटी बज रही है...'
+      });
+    }
+
+    const rawStatus = (matchingLog.call_status || '').toLowerCase();
+    const durationSec = matchingLog.call_duration_in_seconds || 0;
+    const durationMin = matchingLog.call_duration_in_minutes || 0;
+    const totalSec = (durationMin * 60) + durationSec;
+    const isFinished = rawStatus === 'completed' || rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed';
+    const finalStatus = rawStatus === 'completed' ? (totalSec > 0 ? 'connected' : 'failed') : (isFinished ? 'failed' : 'calling');
+    const durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
+    const summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'सफल बातचीत पूरी हुई' : (rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा' : 'कॉल नहीं लगी'));
+    let audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
+    if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://omnidim.io' + audioUrl;
+
+    return res.json({
+      success: true,
+      ended: isFinished,
+      status: finalStatus,
+      rawStatus,
+      totalSec,
+      durationStr,
+      summary,
+      audioUrl,
+      timeOfCall: matchingLog.time_of_call,
+      logId: matchingLog.id
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ----------------------------------------------------
 // 5.0.1 OMNIDIMENSION AUDIO RECORDING STREAMING PROXY
 // Full HTTP 206 Partial Content & Range Header Support
 // Solves audio cutting off / stopping mid-way in browsers

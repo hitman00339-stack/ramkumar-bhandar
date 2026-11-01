@@ -498,6 +498,17 @@ const TelephonyUI = {
         summaryText = isConnected ? `कॉल पूरी हुई • अवधि ${durationStr}` : (failReason || 'कॉल कनेक्ट नहीं हुई');
       }
 
+      let formattedTime = c.time_of_call || 'आज';
+      try {
+        if (c.time_of_call) {
+          const utcMs = new Date(c.time_of_call + ' UTC').getTime();
+          if (!isNaN(utcMs)) {
+            const d = new Date(utcMs);
+            formattedTime = d.toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' });
+          }
+        }
+      } catch (e) {}
+
       return {
         id: String(c.id || ('omni_' + Math.random())),
         phone: formattedPhone,
@@ -515,7 +526,7 @@ const TelephonyUI = {
         failReason,
         statusText: isConnected ? '✅ बात हुई' : (rawStatus === 'no-answer' ? '❌ नहीं उठा (00:00)' : (rawStatus === 'busy' ? '❌ व्यस्त (busy)' : '❌ नहीं लगा')),
         statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
-        time: c.time_of_call || 'आज',
+        time: formattedTime,
         timestamp: c.time_of_call || c.created_at || null,
         summary: summaryText,
         transcript: c.call_conversation || '',
@@ -927,6 +938,7 @@ const TelephonyUI = {
     if (bPend) bPend.innerText = pendingCustomers.length;
     if (bTotAll) bTotAll.innerText = totalAllList.length;
     if (bInaug) bInaug.innerText = inaugurationCalls.length;
+    this.updateContactsBookBadges();
 
     // Show/Hide Batch Toolbar
     const toolbar = document.getElementById('call-tab-toolbar');
@@ -935,7 +947,7 @@ const TelephonyUI = {
     if (selectedCountEl) selectedCountEl.innerText = selectedCount;
 
     if (toolbar) {
-      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'inauguration') {
+      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'inauguration' || this.currentCallTab === 'total_all') {
         toolbar.classList.remove('hidden');
         toolbar.classList.add('flex');
       } else {
@@ -957,6 +969,16 @@ const TelephonyUI = {
       activeList = totalAllList;
     } else if (this.currentCallTab === 'inauguration') {
       activeList = inaugurationCalls;
+    }
+
+    // Synchronize Top Select-All Checkbox in toolbar
+    const selectAllBox = document.getElementById('call-tab-select-all');
+    if (selectAllBox) {
+      if (activeList && activeList.length > 0) {
+        selectAllBox.checked = activeList.every(c => this.selectedInTab.has(c.id));
+      } else {
+        selectAllBox.checked = false;
+      }
     }
 
     // Render by Selected View Mode
@@ -1899,6 +1921,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         shopId: 'kirana',
         campaign: 'inauguration'
       })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    } else if (this.currentCallTab === 'total_all' || this.currentCallTab === 'all') {
+      toCall = (data.totalAllList || []).map(c => ({
+        id: c.id,
+        name: c.customerName || c.name || 'ग्राहक',
+        phone: c.rawPhone || c.phone,
+        due: c.dueAmount || 0,
+        shopId: c.shopId || AppState.currentShopId
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
     }
 
     if (toCall.length === 0) {
@@ -2012,10 +2042,6 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const total = this.autoDialQueue.length;
     const currentNum = this.autoDialCurrentIndex + 1;
 
-    // NOTE: Same-day re-calling is ALLOWED by design.
-    // We only skip if the campaign entry is already marked 'connected' (manual override or prior session).
-    // Do NOT skip based on the live connectedCalls set — user may intentionally retry today.
-
     // Update Banner UI - Stage 1: Initiating call
     const progressEl = document.getElementById('calling-banner-progress');
     const targetEl = document.getElementById('calling-banner-current-target');
@@ -2040,141 +2066,131 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       ? `नमस्ते ${currentCustomer.name} जी, रामकुमार भंडार से तकादा कॉल है। आपके खाते में ₹${due} का बकाया है। कृपया समय पर भुगतान करने का कष्ट करें। धन्यवाद!`
       : `नमस्ते ${currentCustomer.name} जी, रामकुमार किराना एवं जनरल स्टोर के उद्घाटन समारोह में आप सादर आमंत्रित हैं। 4 नवंबर को पधारें।`);
 
-    // Dispatch Call (Single active call at a time)
     try {
-      await fetch('/api/omnidim/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: 276578,
-          toNumber: '+91' + cleanPhone,
-          prompt,
-          context: {
-            customerName: currentCustomer.name,
-            amount: due,
-            shopId: currentCustomer.shopId || AppState.currentShopId
-          }
-        })
-      });
-    } catch (err) {
-      console.warn('Auto-dial call dispatch failed:', err);
-    }
+      let dispatchRequestId = null;
+      const dispatchTime = Date.now();
 
-    if (statusEl) {
-      statusEl.innerText = '🔔 घंटी बज रही है / बातचीत जारी... (कॉल समाप्त होने की प्रतीक्षा)';
-      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
-    }
-
-    // STRICT 1-BY-1 TELECOM TRACKING:
-    // Poll logs every 2.5s until this specific call FINISHES (or max 85s carrier timeout)
-    const startTime = Date.now();
-    const maxPollTimeMs = 85000;
-    let callEnded = false;
-    let finalStatus = 'failed';
-    let durationStr = '00:00';
-    let summary = '';
-    let audioUrl = null;
-
-    while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
-      if (!this.isAutoDialing) return; // User stopped the queue
-      if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 1500));
-        continue;
+      // Dispatch Call (Single active call at a time)
+      try {
+        const dRes = await fetch('/api/omnidim/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 276578,
+            toNumber: '+91' + cleanPhone,
+            prompt,
+            context: {
+              customerName: currentCustomer.name,
+              amount: due,
+              shopId: currentCustomer.shopId || AppState.currentShopId
+            }
+          })
+        });
+        if (dRes.ok) {
+          const dJson = await dRes.json();
+          dispatchRequestId = dJson.omniResponse?.requestId || null;
+        }
+      } catch (err) {
+        console.warn('Auto-dial call dispatch failed:', err);
       }
 
+      if (statusEl) {
+        statusEl.innerText = '🔔 घंटी बज रही है / बातचीत जारी... (कॉल समाप्त होने की प्रतीक्षा)';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
+      }
+
+      // STRICT 1-BY-1 REAL-TIME CALL OUTCOME TRACKING:
+      // Polls ultra-fast active call status endpoint every 2.5s until call terminates
+      const startTime = Date.now();
+      const maxPollTimeMs = 60000;
+      let callEnded = false;
+      let finalStatus = 'failed';
+      let durationStr = '00:00';
+      let summary = '';
+      let audioUrl = null;
+
+      // Small initial wait of 2.5s before first check
       await new Promise(r => setTimeout(r, 2500));
 
-      try {
-        const logsRes = await fetch('/api/omnidim/call-logs');
-        if (logsRes.ok) {
-          const logsData = await logsRes.json();
-          const logs = logsData.logs || [];
+      while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
+        if (!this.isAutoDialing) return; // User stopped the queue
+        if (this.isAutoDialPaused) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
 
-          const matchingLog = logs.find(l => {
-            const toClean = (l.to_number || '').replace(/\D/g, '');
-            const fromClean = (l.from_number || '').replace(/\D/g, '');
-            if (!toClean.endsWith(cleanPhone) && !fromClean.endsWith(cleanPhone)) return false;
-            // Only accept logs created at or near this dial attempt!
-            const logTime = new Date(l.time_of_call || l.created_at || 0).getTime();
-            if (logTime && logTime < (startTime - 15000)) return false;
-            return true;
-          });
-
-          if (matchingLog) {
-            const rawStatus = (matchingLog.call_status || '').toLowerCase();
-            const sec = matchingLog.call_duration_in_seconds || 0;
-            const min = matchingLog.call_duration_in_minutes || 0;
-            const totalSec = (min * 60) + sec;
-
-            if (rawStatus === 'completed') {
+        try {
+          const statusUrl = `/api/omnidim/call-status/${cleanPhone}?since=${dispatchTime}${dispatchRequestId ? `&requestId=${dispatchRequestId}` : ''}`;
+          const statusRes = await fetch(statusUrl);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.ended) {
               callEnded = true;
-              finalStatus = totalSec > 0 ? 'connected' : 'failed';
-              durationStr = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-              summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'सफल बातचीत पूरी हुई' : 'कॉल कनेक्ट नहीं हुई');
-              audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
-              break;
-            } else if (rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed') {
-              callEnded = true;
-              finalStatus = 'failed';
-              durationStr = '00:00';
-              summary = rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा (No Answer)' : (rawStatus === 'busy' ? 'फोन व्यस्त था (Busy)' : 'नेटवर्क समस्या (Failed)');
+              finalStatus = statusData.status || 'failed';
+              durationStr = statusData.durationStr || '00:00';
+              summary = statusData.summary || '';
+              audioUrl = statusData.audioUrl || null;
               break;
             }
           }
+        } catch (e) {
+          console.warn('Polling active call status error:', e);
         }
-      } catch (e) {
-        console.warn('Polling logs error:', e);
+
+        await new Promise(r => setTimeout(r, 2500));
       }
-    }
 
-    if (!callEnded) {
-      finalStatus = 'failed';
-      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
-    }
-
-    // Persist final call status to server
-    try {
-      await fetch('/api/campaign/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cleanPhone,
-          status: finalStatus,
-          durationStr,
-          summary,
-          audioUrl
-        })
-      });
-    } catch (e) {}
-
-    if (campMatch) {
-      campMatch.status = finalStatus;
-      campMatch.durationStr = durationStr;
-      campMatch.summary = summary;
-      campMatch.audioUrl = audioUrl;
-      campMatch.lastCallAt = new Date().toISOString();
-    }
-
-    this.renderCurrentTab();
-
-    // Update banner with call outcome
-    if (statusEl) {
-      if (finalStatus === 'connected') {
-        statusEl.innerText = `✅ कॉल समाप्त (अवधि ${durationStr}) • अगली कॉल 3s में`;
-        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700';
-      } else {
-        statusEl.innerText = `❌ कॉल नहीं उठी • लाइन खाली हो रही है...`;
-        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
+      if (!callEnded) {
+        finalStatus = 'failed';
+        summary = 'कॉल समय-सीमा समाप्त (Timeout)';
       }
+
+      // Persist final call status to server
+      try {
+        await fetch('/api/campaign/update-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cleanPhone,
+            status: finalStatus,
+            durationStr,
+            summary,
+            audioUrl
+          })
+        });
+      } catch (e) {}
+
+      if (campMatch) {
+        campMatch.status = finalStatus;
+        campMatch.durationStr = durationStr;
+        campMatch.summary = summary;
+        campMatch.audioUrl = audioUrl;
+        campMatch.lastCallAt = new Date().toISOString();
+      }
+
+      this.renderCurrentTab();
+
+      // Update banner with call outcome
+      if (statusEl) {
+        if (finalStatus === 'connected') {
+          statusEl.innerText = `✅ कॉल समाप्त (अवधि ${durationStr}) • अगली कॉल 3s में`;
+          statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700';
+        } else {
+          statusEl.innerText = `❌ कॉल नहीं उठी • अगली कॉल 3s में...`;
+          statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
+        }
+      }
+    } catch (err) {
+      console.error('Auto-dial execution error:', err);
+    } finally {
+      // Channel Release Buffer: Move to next contact in queue reliably
+      this.autoDialCurrentIndex++;
+
+      if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
+      this.autoDialTimer = setTimeout(() => {
+        this.processNextAutoDial();
+      }, 2500);
     }
-
-    // Channel Release Buffer: Wait 3.5s so telecom carrier clears line
-    this.autoDialCurrentIndex++;
-
-    if (this.autoDialTimer) clearTimeout(this.autoDialTimer);
-    this.autoDialTimer = setTimeout(() => {
-      this.processNextAutoDial();
-    }, 3500);
   },
 
   pauseOrResumeAutoDial() {
@@ -2383,7 +2399,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   },
 
   updateContactsBookBadges() {
-    const count = this.contactsBook ? this.contactsBook.length : 0;
+    let count = (this.contactsBook && this.contactsBook.length > 0) ? this.contactsBook.length : 0;
+    if (count === 0) {
+      try {
+        const { totalAllList } = this.getProcessedData();
+        if (totalAllList && totalAllList.length > 0) {
+          count = totalAllList.length;
+        }
+      } catch (e) {}
+    }
     const badge1 = document.getElementById('contacts-book-count-badge');
     const badge2 = document.getElementById('top-contacts-book-count');
     if (badge1) badge1.innerText = count;
@@ -2735,135 +2759,127 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       body: JSON.stringify({ cleanPhone: contact.cleanPhone, status: 'calling' })
     }).catch(() => {});
 
-    // Dispatch call via Omnidimension Outgoing Bot (#276578)
     try {
-      await fetch('/api/omnidim/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: 276578,
-          toNumber: '+91' + contact.cleanPhone,
-          prompt: contact.prompt,
-          context: {
-            customerName: contact.name,
-            campaign: 'inauguration',
-            shopName: 'रामकुमार किराना एवं जनरल स्टोर'
-          }
-        })
-      });
-    } catch (err) {
-      console.warn('Call dispatch error:', err);
-    }
+      let dispatchRequestId = null;
+      const dispatchTime = Date.now();
 
-    if (statusEl) {
-      statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
-      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
-    }
-
-    // Poll Omnidimension Call Logs to detect call completion
-    // Wait until call finishes (or max 75 seconds timeout)
-    const startTime = Date.now();
-    const maxPollTimeMs = 75000;
-    let callEnded = false;
-    let finalStatus = 'failed';
-    let durationStr = '00:00';
-    let summary = '';
-    let audioUrl = null;
-
-    while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
-      if (!this.isCampaignCalling) return;
-      if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 2000));
-        continue;
-      }
-
-      await new Promise(r => setTimeout(r, 3500));
-
+      // Dispatch call via Omnidimension Outgoing Bot (#276578)
       try {
-        const logsRes = await fetch('/api/omnidim/call-logs');
-        const logsData = await logsRes.json();
-        const logs = logsData.logs || logsData.calls || [];
-
-        const matchingLog = logs.find(l => {
-          const toClean = (l.to_number || '').replace(/\D/g, '');
-          const fromClean = (l.from_number || '').replace(/\D/g, '');
-          if (!toClean.endsWith(contact.cleanPhone) && !fromClean.endsWith(contact.cleanPhone)) return false;
-          // Only accept logs created at or near this dial attempt!
-          const logTime = new Date(l.time_of_call || l.created_at || 0).getTime();
-          if (logTime && logTime < (startTime - 15000)) return false;
-          return true;
+        const dRes = await fetch('/api/omnidim/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 276578,
+            toNumber: '+91' + contact.cleanPhone,
+            prompt: contact.prompt,
+            context: {
+              customerName: contact.name,
+              campaign: 'inauguration',
+              shopName: 'रामकुमार किराना एवं जनरल स्टोर'
+            }
+          })
         });
-
-        if (matchingLog) {
-          const rawStatus = (matchingLog.call_status || '').toLowerCase();
-          const durationSec = matchingLog.call_duration_in_seconds || 0;
-          const durationMin = matchingLog.call_duration_in_minutes || 0;
-          const totalSec = (durationMin * 60) + durationSec;
-
-          if (rawStatus === 'completed') {
-            callEnded = true;
-            finalStatus = totalSec > 0 ? 'connected' : 'failed';
-            durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
-            summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'उद्घाटन आमंत्रण सफल' : 'कॉल कनेक्ट नहीं हुई');
-            audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
-            if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://omnidim.io' + audioUrl;
-            break;
-          } else if (rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed') {
-            callEnded = true;
-            finalStatus = 'failed';
-            durationStr = '00:00';
-            summary = rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा (No Answer)' : (rawStatus === 'busy' ? 'फोन व्यस्त था (Busy)' : 'नेटवर्क समस्या (Failed)');
-            break;
-          }
+        if (dRes.ok) {
+          const dJson = await dRes.json();
+          dispatchRequestId = dJson.omniResponse?.requestId || null;
         }
-      } catch (e) {
-        console.warn('Polling logs error:', e);
+      } catch (err) {
+        console.warn('Call dispatch error:', err);
       }
+
+      if (statusEl) {
+        statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
+      }
+
+      // STRICT 1-BY-1 REAL-TIME CALL OUTCOME TRACKING:
+      // Polls ultra-fast active call status endpoint every 2.5s until call terminates
+      const startTime = Date.now();
+      const maxPollTimeMs = 60000;
+      let callEnded = false;
+      let finalStatus = 'failed';
+      let durationStr = '00:00';
+      let summary = '';
+      let audioUrl = null;
+
+      // Small initial wait of 2.5s before first check
+      await new Promise(r => setTimeout(r, 2500));
+
+      while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
+        if (!this.isCampaignCalling) return;
+        if (this.isAutoDialPaused) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+
+        try {
+          const statusUrl = `/api/omnidim/call-status/${contact.cleanPhone}?since=${dispatchTime}${dispatchRequestId ? `&requestId=${dispatchRequestId}` : ''}`;
+          const statusRes = await fetch(statusUrl);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.ended) {
+              callEnded = true;
+              finalStatus = statusData.status || 'failed';
+              durationStr = statusData.durationStr || '00:00';
+              summary = statusData.summary || '';
+              audioUrl = statusData.audioUrl || null;
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn('Polling campaign call status error:', e);
+        }
+
+        await new Promise(r => setTimeout(r, 2500));
+      }
+
+      if (!callEnded) {
+        finalStatus = 'failed';
+        summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+      }
+
+      // Persist final status to server and state
+      try {
+        await fetch('/api/campaign/update-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cleanPhone: contact.cleanPhone,
+            status: finalStatus,
+            durationStr,
+            summary,
+            audioUrl
+          })
+        });
+      } catch (e) {}
+
+      if (localC) {
+        localC.status = finalStatus;
+        localC.durationStr = durationStr;
+        localC.summary = summary;
+        localC.audioUrl = audioUrl;
+        localC.lastCallAt = new Date().toISOString();
+      }
+      this.renderCurrentTab();
+
+      if (statusEl) {
+        statusEl.innerText = finalStatus === 'connected' ? '✅ बातचीत पूरी हुई • अगली कॉल 3s में...' : '❌ कॉल नहीं उठी • अगली कॉल 3s में...';
+        statusEl.className = finalStatus === 'connected' ? 
+          'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700' :
+          'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
+      }
+    } catch (err) {
+      console.error('Sequential campaign call error:', err);
+    } finally {
+      // Move to next contact in queue reliably
+      this.campaignCurrentIndex++;
+
+      // Polite pause of 2.5 seconds between calls
+      if (this.campaignTimer) clearTimeout(this.campaignTimer);
+      this.campaignTimer = setTimeout(() => {
+        this.processNextSequentialCall();
+      }, 2500);
     }
-
-    if (!callEnded) {
-      finalStatus = 'failed';
-      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
-    }
-
-    // Persist final status to server and state
-    try {
-      await fetch('/api/campaign/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cleanPhone: contact.cleanPhone,
-          status: finalStatus,
-          durationStr,
-          summary,
-          audioUrl
-        })
-      });
-    } catch (e) {}
-
-    if (localC) {
-      localC.status = finalStatus;
-      localC.durationStr = durationStr;
-      localC.summary = summary;
-      localC.audioUrl = audioUrl;
-      localC.lastCallAt = new Date().toISOString();
-    }
-    this.renderCurrentTab();
-
-    if (statusEl) {
-      statusEl.innerText = finalStatus === 'connected' ? '✅ बातचीत पूरी हुई • अगली कॉल...' : '❌ कॉल नहीं उठी • अगली कॉल...';
-      statusEl.className = finalStatus === 'connected' ? 
-        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700' :
-        'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700';
-    }
-
-    // Move to next contact in queue!
-    this.campaignCurrentIndex++;
-
-    // Polite pause of 2.5 seconds between calls
-    setTimeout(() => {
-      this.processNextSequentialCall();
-    }, 2500);
   },
 
   playSampleAudio(callId) {
@@ -3187,7 +3203,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
                     <span class="material-symbols-outlined text-[13px]">${isInbound ? 'call_received' : 'call_made'}</span>
                     <span>${isInbound ? 'इनकमिंग कॉल' : 'आउटगोइंग कॉल'}</span>
                   </span>
-                  <span class="text-slate-500 font-normal text-[11px]">${h.date ? new Date(h.date).toLocaleString('hi-IN') : 'हाल ही में'}</span>
+                  <span class="text-slate-500 font-normal text-[11px]">${h.date || 'हाल ही में'}</span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${h.status === 'completed' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'}">
+                    ${h.status === 'completed' ? '✅ बात हुई' : (h.rawStatus === 'no-answer' ? '❌ नहीं उठा' : (h.rawStatus === 'busy' ? '❌ व्यस्त' : '❌ नहीं लगा'))}
+                  </span>
                 </div>
                 <span class="font-mono font-bold text-[11px] text-slate-700">⏱️ ${h.durationStr || '00:00'}</span>
               </div>
