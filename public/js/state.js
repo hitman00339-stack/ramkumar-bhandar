@@ -86,13 +86,21 @@ const AppState = {
       if (s) this.shops = JSON.parse(s);
 
       const t = localStorage.getItem('rb_transactions');
-      if (t) this.transactions = JSON.parse(t);
+      if (t) {
+        const parsedT = JSON.parse(t);
+        const dummyTxns = ['txn_1', 'txn_2', 'txn_3'];
+        this.transactions = (parsedT || []).filter(x => !dummyTxns.includes(x.id));
+      }
 
       const p = localStorage.getItem('rb_products');
       if (p) this.products = JSON.parse(p);
 
       const c = localStorage.getItem('rb_customers');
-      if (c) this.customers = JSON.parse(c);
+      if (c) {
+        const parsedC = JSON.parse(c);
+        const dummyCusts = ['cust_1', 'cust_2', 'cust_3', 'cust_4', 'cust_5', 'cust_6'];
+        this.customers = (parsedC || []).filter(x => !dummyCusts.includes(x.id));
+      }
 
       const q = localStorage.getItem('rb_sync_queue');
       if (q) this.syncQueue = JSON.parse(q);

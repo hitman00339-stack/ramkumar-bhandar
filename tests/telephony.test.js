@@ -377,7 +377,7 @@ test('AI Telephony Agent Integration Tests', async (t) => {
         id: 10585194,
         bot_name: 'Ramkumar Khad Bhandar - Incoming',
         time_of_call: '10/31/2026 14:10:00',
-        from_number: '+919336317193',
+        from_number: '+919799988811',
         to_number: '918045440103',
         call_direction: 'inbound',
         call_status: 'completed',
@@ -392,8 +392,8 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     const harvested = db.recordCallHistoryFromLogs(incomingLog);
     assert.strictEqual(harvested.length, 2, 'दोनों इनकमिंग कॉल प्रोसेस होनी चाहिए');
 
-    // Verify contact 9336317193 was automatically created and saved permanently
-    const subhash = db.getContactProfile('9336317193');
+    // Verify contact 9799988811 was automatically created and saved permanently
+    const subhash = db.getContactProfile('9799988811');
     assert(subhash, 'नया इनकमिंग कॉलर डायरेक्टरी में स्वतः सहेजा जाना चाहिए');
     assert.strictEqual(subhash.name, 'सुभाष किसान');
     assert.strictEqual(subhash.totalCalls, 1);

@@ -735,7 +735,7 @@ async function syncAllOmnidimLogs() {
     }
 
     if (allLogs.length > 0) {
-      db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: true });
+      db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: false });
       console.log(`[Omnidim Sync] Successfully ingested ${allLogs.length} call logs into master directory.`);
     }
   } catch (err) {
@@ -873,9 +873,6 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       return res.status(400).json({ success: false, error: 'अमान्य मोबाइल नंबर' });
     }
 
-    const { since, requestId } = req.query;
-    const sinceMs = since ? parseInt(since, 10) : null;
-
     // Fetch latest 15 logs directly from Omnidimension
     let latestLogs = [];
     try {
@@ -899,25 +896,7 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
     const matchingLog = allLogs.find(l => {
       const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
       const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
-      if (toClean !== clean && fromClean !== clean) return false;
-
-      // 1. If requestId was supplied and log has call_request_id, match exactly
-      if (requestId && l.call_request_id && l.call_request_id.id) {
-        if (String(l.call_request_id.id) === String(requestId)) {
-          return true;
-        }
-      }
-
-      // 2. If since was supplied, verify log was created at or after dispatch
-      if (sinceMs && l.time_of_call) {
-        const logUtcMs = new Date(l.time_of_call + ' UTC').getTime();
-        if (!isNaN(logUtcMs) && !isNaN(sinceMs)) {
-          // If log is older than 25 seconds before dispatch, it belongs to an earlier call
-          if (logUtcMs < (sinceMs - 25000)) return false;
-        }
-      }
-
-      return true;
+      return toClean === clean || fromClean === clean;
     });
 
     if (!matchingLog) {
@@ -1101,6 +1080,20 @@ app.post('/api/contacts-book', (req, res) => {
       savedCount: saved.length,
       totalCount: db.getContactsBook().length,
       contacts: db.getContactsBook()
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/contacts-book/clear', (req, res) => {
+  try {
+    db.clearContactsBook();
+    res.json({
+      success: true,
+      message: 'स्थायी डायरेक्टरी के सभी नंबर खाली कर दिए गए हैं',
+      count: 0,
+      contacts: []
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

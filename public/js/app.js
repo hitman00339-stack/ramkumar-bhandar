@@ -40,7 +40,7 @@ const App = {
 
   registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js?v=14', { updateViaCache: 'none' }).then(reg => {
+      navigator.serviceWorker.register('/sw.js?v=17', { updateViaCache: 'none' }).then(reg => {
         reg.update();
       }).catch(err => {
         console.warn('SW registration failed:', err);
@@ -330,8 +330,8 @@ const App = {
     const totalDueEl = document.getElementById('home-total-market-due');
     const krishiDueEl = document.getElementById('home-krishi-due');
     const kiranaDueEl = document.getElementById('home-kirana-due');
-    const krishiDue = summary.krishi?.totalCustomerDue || 42000;
-    const kiranaDue = summary.kirana?.totalCustomerDue || 6500;
+    const krishiDue = summary.krishi?.totalCustomerDue ?? 0;
+    const kiranaDue = summary.kirana?.totalCustomerDue ?? 0;
 
     if (totalDueEl) {
       totalDueEl.innerText = `₹${(krishiDue + kiranaDue).toLocaleString('en-IN')}`;
@@ -368,9 +368,9 @@ const App = {
       }
     }
 
-    if (kSales) kSales.innerText = `₹${(summary.krishi?.todaySales || 14200).toLocaleString('en-IN')}`;
-    if (kCredit) kCredit.innerText = `₹${(summary.krishi?.todayCreditSales || 3400).toLocaleString('en-IN')}`;
-    if (kLowStock) kLowStock.innerText = `${summary.krishi?.lowStockCount || 3} खाद`;
+    if (kSales) kSales.innerText = `₹${(summary.krishi?.todaySales ?? 0).toLocaleString('en-IN')}`;
+    if (kCredit) kCredit.innerText = `₹${(summary.krishi?.todayCreditSales ?? 0).toLocaleString('en-IN')}`;
+    if (kLowStock) kLowStock.innerText = `${summary.krishi?.lowStockCount ?? 0} खाद`;
 
     // 2. KIRANA CARD
     const gDot = document.getElementById('kirana-status-dot');
@@ -397,9 +397,9 @@ const App = {
       }
     }
 
-    if (gSales) gSales.innerText = `₹${(summary.kirana?.todaySales || 8750).toLocaleString('en-IN')}`;
-    if (gCredit) gCredit.innerText = `₹${(summary.kirana?.todayCreditSales || 1200).toLocaleString('en-IN')}`;
-    if (gLowStock) gLowStock.innerText = `${summary.kirana?.lowStockCount || 5} पैकेट`;
+    if (gSales) gSales.innerText = `₹${(summary.kirana?.todaySales ?? 0).toLocaleString('en-IN')}`;
+    if (gCredit) gCredit.innerText = `₹${(summary.kirana?.todayCreditSales ?? 0).toLocaleString('en-IN')}`;
+    if (gLowStock) gLowStock.innerText = `${summary.kirana?.lowStockCount ?? 0} पैकेट`;
   },
 
   enterShop(shopId) {
@@ -509,11 +509,11 @@ const App = {
     const dueEl = document.getElementById('detail-total-due');
     const payableEl = document.getElementById('detail-total-payable');
 
-    if (saleEl) saleEl.innerText = `₹${(summary.todaySales || 18450).toLocaleString('en-IN')}`;
-    if (cashEl) cashEl.innerText = `नकद: ₹${(summary.todayCashSales || 12000).toLocaleString('en-IN')}`;
-    if (creditEl) creditEl.innerText = `उधार: ₹${(summary.todayCreditSales || 6450).toLocaleString('en-IN')}`;
-    if (dueEl) dueEl.innerText = `₹${(summary.totalCustomerDue || 134500).toLocaleString('en-IN')}`;
-    if (payableEl) payableEl.innerText = `₹${(summary.totalSupplierPayable || 42000).toLocaleString('en-IN')}`;
+    if (saleEl) saleEl.innerText = `₹${(summary.todaySales ?? 0).toLocaleString('en-IN')}`;
+    if (cashEl) cashEl.innerText = `नकद: ₹${(summary.todayCashSales ?? 0).toLocaleString('en-IN')}`;
+    if (creditEl) creditEl.innerText = `उधार: ₹${(summary.todayCreditSales ?? 0).toLocaleString('en-IN')}`;
+    if (dueEl) dueEl.innerText = `₹${(summary.totalCustomerDue ?? 0).toLocaleString('en-IN')}`;
+    if (payableEl) payableEl.innerText = `₹${(summary.totalSupplierPayable ?? 0).toLocaleString('en-IN')}`;
   },
 
   setupSettingsUI() {

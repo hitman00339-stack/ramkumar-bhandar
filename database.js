@@ -61,11 +61,8 @@ class Database {
           this.data.sprayerHistory = [];
           needsSave = true;
         }
-        if (!this.data.contactsBook || this.data.contactsBook.length === 0) {
+        if (!this.data.contactsBook) {
           this.data.contactsBook = [];
-          if (this.data.omnidimLogsCache && this.data.omnidimLogsCache.length > 0) {
-            this.recordCallHistoryFromLogs(this.data.omnidimLogsCache, { autoHarvestInbound: true });
-          }
           needsSave = true;
         }
         if (!this.data.campaignContacts) {
@@ -1193,6 +1190,13 @@ class Database {
     return false;
   }
 
+  clearContactsBook() {
+    this.data.contactsBook = [];
+    this.data.lastMutationTime = new Date().toISOString();
+    this.save();
+    return true;
+  }
+
   // ----------------------------------------------------
   // NUMBER-WISE CALL INTERACTION & PERSONAL PROFILE ENGINE
   // Stores turn-by-turn history, personal context, and auto-resolves callbacks
@@ -1263,7 +1267,7 @@ class Database {
     if (notes) contact.personalData.notes = notes;
 
     if (!contact.callHistory) contact.callHistory = [];
-    // Avoid duplicate history entries by timestamp/summary or ID
+    // Avoid duplicate history entries by ID or timestamp/direction
     const isDuplicate = contact.callHistory.some(h => 
       (id && (h.id === historyId || h.id === String(id) || h.id === 'omni_' + id)) ||
       (h.direction === direction && Math.abs(new Date(h.rawTime || h.date || 0) - new Date(now)) < 15000)
@@ -1372,7 +1376,7 @@ class Database {
       }
 
       const isInbound = log.call_direction === 'inbound';
-      const onlyIfExisting = false; // Always preserve every customer number (incoming & outgoing) in permanent directory!
+      const onlyIfExisting = !isInbound || !autoHarvestInbound;
 
       const contact = this.recordCallInteraction({
         id: log.id,
@@ -1507,23 +1511,11 @@ class Database {
     });
 
     (contact.callHistory || []).forEach(h => {
-      const hidStr = String(h.id || '');
-      const rawId = hidStr.replace(/^omni_/, '');
-      if (seenIds.has(hidStr) || (rawId && seenIds.has(rawId))) return;
-      seenIds.add(hidStr);
+      const hid = String(h.id || '');
+      const rawId = hid.replace(/^omni_/, '');
+      if (seenIds.has(hid) || (rawId && seenIds.has(rawId))) return;
+      seenIds.add(hid);
       if (rawId) seenIds.add(rawId);
-
-      // Deduplicate if already matched an omni record (same direction and within 120s)
-      const hTime = new Date(h.rawTime || h.date || 0).getTime();
-      if (!isNaN(hTime) && hTime > 0) {
-        const isAlreadyRepresented = historyList.some(item => {
-          if (item.direction !== h.direction) return false;
-          const itemTime = new Date(item.rawTime || item.date || 0).getTime();
-          return !isNaN(itemTime) && Math.abs(itemTime - hTime) < 120000;
-        });
-        if (isAlreadyRepresented) return;
-      }
-
       historyList.push(h);
     });
 
