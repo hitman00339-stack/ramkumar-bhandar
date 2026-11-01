@@ -4,7 +4,7 @@
   <script>
     // IMMEDIATE CACHE PURGE & VERSION ENFORCEMENT (Kills any stale cache permanently)
     (function() {
-      const CURRENT_VER = 'rb_v17_20261101_zero_dummy';
+      const CURRENT_VER = 'rb_v18_20261101_sesh_fix';
       if (localStorage.getItem('rb_active_version') !== CURRENT_VER) {
         localStorage.setItem('rb_active_version', CURRENT_VER);
         // Purge any legacy dummy items from previous versions
@@ -854,10 +854,10 @@
             </div>
           </div>
 
-          <!-- Card 4: Not Called Yet (Pending Dues) -->
+          <!-- Card 4: Not Called Yet (Pending Dues & Campaign) -->
           <div onclick="TelephonyUI.switchCallTab('pending')" class="p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200 shadow-xs flex items-center justify-between cursor-pointer active:scale-98 transition-all hover:border-amber-300">
             <div>
-              <span class="text-[11px] font-bold text-amber-900 uppercase block">⏳ कॉल बाकी (उधार)</span>
+              <span class="text-[11px] font-bold text-amber-900 uppercase block">⏳ कॉल बाकी (शेष)</span>
               <span class="text-xl md:text-2xl font-extrabold text-amber-800 font-numeric-display" id="kpi-pending-calls">0</span>
             </div>
             <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center">

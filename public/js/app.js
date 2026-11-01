@@ -40,7 +40,7 @@ const App = {
 
   registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js?v=17', { updateViaCache: 'none' }).then(reg => {
+      navigator.serviceWorker.register('/sw.js?v=18', { updateViaCache: 'none' }).then(reg => {
         reg.update();
       }).catch(err => {
         console.warn('SW registration failed:', err);

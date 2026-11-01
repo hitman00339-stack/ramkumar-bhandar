@@ -851,17 +851,127 @@ const TelephonyUI = {
     if (this.dateFilter) {
       const filterDateStr = this.dateFilter;
       filteredInaugurationCalls = inaugurationCalls.filter(c => {
-        const ts = c.timestamp || c.time || null;
-        if (!ts) return false;
+        const ts = c.timestamp || c.addedAt || c.lastCallAt || c.time || null;
+        if (!ts) return true; // Keep uncalled campaign contacts visible so user never loses unplaced calls!
         try {
           const d = new Date(ts);
-          if (isNaN(d.getTime())) return false;
+          if (isNaN(d.getTime())) return true;
           const yyyy = d.getFullYear();
           const mm = String(d.getMonth() + 1).padStart(2, '0');
           const dd = String(d.getDate()).padStart(2, '0');
           return `${yyyy}-${mm}-${dd}` === filterDateStr;
-        } catch { return false; }
+        } catch { return true; }
       });
+    }
+
+    // ----------------------------------------------------
+    // COMPREHENSIVE PENDING CALLS LIST ("कॉल बाकी - शेष")
+    // Gathers ALL numbers where a call has NOT been placed or is pending:
+    // 1. Inauguration campaign contacts where call is pending / not placed
+    // 2. Khatabook customers with positive balance who haven't been called
+    // 3. Contacts directory contacts who haven't been called
+    // ----------------------------------------------------
+    const pendingCampaignList = filteredInaugurationCalls.filter(c => c.isPending);
+
+    const pendingCreditList = pendingCustomers.map(p => {
+      const clean = (p.phone || '').replace(/\D/g, '').slice(-10);
+      const due = (p.balancesRupees ? p.balancesRupees[shopId] : (p.balances?.[shopId] ? p.balances[shopId] / 100 : 0)) || 0;
+      return {
+        id: 'pend_' + p.id,
+        cleanPhone: clean,
+        phone: p.phone,
+        rawPhone: clean,
+        customerName: p.name,
+        village: p.village || 'खाता बही',
+        source: '📖 खाता ग्राहक',
+        dueAmount: due,
+        shopId: p.shopId || shopId,
+        direction: 'pending_outbound',
+        durationSec: 0,
+        durationMin: 0,
+        durationStr: '--',
+        isConnected: false,
+        isFailed: false,
+        isPending: true,
+        statusText: '⏳ कॉल बाकी',
+        statusClass: 'bg-amber-100 text-amber-900 border-amber-300',
+        time: 'लंबित',
+        timestamp: null,
+        summary: `उधार बकाया ₹${due.toLocaleString('en-IN')} • तकादा कॉल शेष है`,
+        transcript: '',
+        audioUrl: null,
+        isCampaign: false
+      };
+    });
+
+    const pendingDirectoryList = [];
+    (this.contactsBook || []).forEach(cb => {
+      const clean = (cb.cleanPhone || cb.phone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10) return;
+      if (connectedPhoneSet.has(clean) || calledPhones.has(clean)) return;
+      if (cb.lastCallStatus === 'completed' || cb.lastCallStatus === 'failed') return;
+      const formatted = cb.phone && cb.phone.includes('+91') ? cb.phone : `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+      pendingDirectoryList.push({
+        id: 'cb_pend_' + clean,
+        cleanPhone: clean,
+        phone: formatted,
+        rawPhone: clean,
+        customerName: cb.name || 'ग्रामवासी / ग्राहक',
+        village: cb.village || cb.campaign || 'स्थायी डायरेक्टरी',
+        source: cb.campaign ? `📢 ${cb.campaign}` : 'सुरक्षित संपर्क',
+        dueAmount: 0,
+        shopId: 'kirana',
+        direction: 'pending_outbound',
+        durationSec: 0,
+        durationMin: 0,
+        durationStr: '--',
+        isConnected: false,
+        isFailed: false,
+        isPending: true,
+        statusText: '⏳ कॉल बाकी',
+        statusClass: 'bg-amber-100 text-amber-900 border-amber-300',
+        time: 'शेष',
+        timestamp: cb.createdAt || null,
+        summary: cb.personalData?.notes ? `📝 ${cb.personalData.notes}` : 'डायरेक्टरी संपर्क • कॉल शेष है',
+        transcript: '',
+        audioUrl: null,
+        isCampaign: Boolean(cb.campaign)
+      });
+    });
+
+    // Merge & Deduplicate all pending calls by 10-digit number
+    const pendingMap = new Map();
+    [...pendingCampaignList, ...pendingCreditList, ...pendingDirectoryList].forEach(item => {
+      const clean = (item.cleanPhone || item.rawPhone || item.phone || '').replace(/\D/g, '').slice(-10);
+      if (clean.length === 10 && !pendingMap.has(clean)) {
+        pendingMap.set(clean, item);
+      }
+    });
+
+    let allPendingCalls = Array.from(pendingMap.values());
+
+    if (this.dateFilter) {
+      const filterDateStr = this.dateFilter;
+      allPendingCalls = allPendingCalls.filter(c => {
+        const ts = c.timestamp || c.addedAt || c.lastCallAt || null;
+        if (!ts) return true; // Always show pending uncalled calls so user never loses them!
+        try {
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) return true;
+          const yyyy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}` === filterDateStr;
+        } catch { return true; }
+      });
+    }
+
+    if (this.searchQuery) {
+      allPendingCalls = allPendingCalls.filter(c =>
+        (c.phone && c.phone.toLowerCase().includes(this.searchQuery)) ||
+        (c.customerName && c.customerName.toLowerCase().includes(this.searchQuery)) ||
+        (c.summary && c.summary.toLowerCase().includes(this.searchQuery))
+      );
     }
 
     let totalAllList = Array.from(masterMap.values());
@@ -895,6 +1005,7 @@ const TelephonyUI = {
       connectedCalls,
       failedCalls,
       pendingCustomers,
+      allPendingCalls,
       totalAllList,
       inaugurationCalls: filteredInaugurationCalls
     };
@@ -905,7 +1016,7 @@ const TelephonyUI = {
     if (!container) return;
 
     const data = this.getProcessedData();
-    const { allCalls, connectedCalls, failedCalls, pendingCustomers, totalAllList, inaugurationCalls } = data;
+    const { allCalls, connectedCalls, failedCalls, pendingCustomers, allPendingCalls, totalAllList, inaugurationCalls } = data;
 
     // Update KPI Card Displays
     const kpiTotal = document.getElementById('kpi-total-calls');
@@ -915,7 +1026,7 @@ const TelephonyUI = {
     if (kpiTotal) kpiTotal.innerText = allCalls.length;
     if (kpiConn) kpiConn.innerText = connectedCalls.length;
     if (kpiFail) kpiFail.innerText = failedCalls.length;
-    if (kpiPend) kpiPend.innerText = pendingCustomers.length;
+    if (kpiPend) kpiPend.innerText = allPendingCalls.length;
 
     // Update Tab Badge Counts
     const bAll = document.getElementById('badge-count-all');
@@ -927,7 +1038,7 @@ const TelephonyUI = {
     if (bAll) bAll.innerText = allCalls.length;
     if (bConn) bConn.innerText = connectedCalls.length;
     if (bFail) bFail.innerText = failedCalls.length;
-    if (bPend) bPend.innerText = pendingCustomers.length;
+    if (bPend) bPend.innerText = allPendingCalls.length;
     if (bTotAll) bTotAll.innerText = totalAllList.length;
     if (bInaug) bInaug.innerText = inaugurationCalls.length;
 
@@ -955,6 +1066,7 @@ const TelephonyUI = {
     } else if (this.currentCallTab === 'failed') {
       activeList = failedCalls;
     } else if (this.currentCallTab === 'pending') {
+      activeList = allPendingCalls;
       isPendingTab = true;
     } else if (this.currentCallTab === 'total_all') {
       activeList = totalAllList;
@@ -964,20 +1076,13 @@ const TelephonyUI = {
 
     // Render by Selected View Mode
     if (this.viewMode === 'split') {
-      container.innerHTML = this.renderSplitView(connectedCalls, failedCalls, pendingCustomers);
+      container.innerHTML = this.renderSplitView(connectedCalls, failedCalls, allPendingCalls);
     } else if (this.viewMode === 'cards') {
-      if (isPendingTab) {
-        container.innerHTML = this.renderPendingCards(pendingCustomers);
-      } else {
-        container.innerHTML = this.renderCardsView(activeList);
-      }
+      container.innerHTML = this.renderCardsView(activeList);
     } else {
       // Default: Interactive Spreadsheet + Dedicated Not Connected Column
-      if (isPendingTab) {
-        container.innerHTML = this.renderPendingSpreadsheet(pendingCustomers, failedCalls);
-      } else {
-        container.innerHTML = this.renderSpreadsheetTable(activeList, failedCalls);
-      }
+      // Renders all uncalled/remaining calls in full multi-action spreadsheet!
+      container.innerHTML = this.renderSpreadsheetTable(activeList, failedCalls);
     }
   },
 
@@ -1856,8 +1961,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     let toCall = [];
 
     if (this.selectedInTab.size > 0) {
-      // Find items in ALL sources including inauguration campaign contacts
-      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList, ...(data.inaugurationCalls || [])];
+      // Find items in ALL sources including inauguration campaign contacts & pending calls
+      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList, ...(data.inaugurationCalls || []), ...(data.allPendingCalls || [])];
       // Deduplicate by ID
       const seenIds = new Set();
       const uniqueSources = allSources.filter(item => {
@@ -1884,16 +1989,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         shopId: c.shopId
       })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
     } else if (this.currentCallTab === 'pending') {
-      toCall = data.pendingCustomers.map(c => {
-        const due = (c.balancesRupees ? c.balancesRupees[AppState.currentShopId] : (c.balances?.[AppState.currentShopId] ? c.balances[AppState.currentShopId] / 100 : 0)) || 0;
-        return {
-          id: c.id,
-          name: c.name,
-          phone: c.phone,
-          due,
-          shopId: AppState.currentShopId
-        };
-      }).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+      toCall = (data.allPendingCalls || []).map(c => ({
+        id: c.id,
+        name: c.customerName || c.name || 'ग्राहक',
+        phone: c.rawPhone || c.phone,
+        cleanPhone: c.cleanPhone || (c.phone || '').replace(/\D/g, '').slice(-10),
+        due: c.dueAmount || 0,
+        shopId: c.shopId || AppState.currentShopId,
+        campaign: c.isCampaign ? 'inauguration' : undefined
+      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
     } else if (this.currentCallTab === 'inauguration') {
       toCall = (data.inaugurationCalls || []).map(c => ({
         id: c.id,
@@ -1945,7 +2049,23 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }
   },
 
-  redialCustomer(phone, name, amount = 0, shopId = null) {
+  redialCustomer(phone, name, amount = 0, shopId = null, isCampaign = false) {
+    const clean = (phone || '').replace(/\D/g, '').slice(-10);
+    const isCamp = isCampaign || this.currentCallTab === 'inauguration' || (this.campaignContacts && this.campaignContacts.some(c => (c.cleanPhone || c.phone || '').endsWith(clean)));
+    if (isCamp) {
+      if (confirm(`क्या आप ${name || 'ग्रामवासी / ग्राहक'} (${phone}) को AI उद्घाटन आमंत्रण कॉल लगाना चाहते हैं?`)) {
+        this.startSequentialCampaignDial([{
+          id: 'camp_dial_' + Date.now(),
+          customerName: name || 'ग्रामवासी / ग्राहक',
+          phone,
+          rawPhone: clean,
+          cleanPhone: clean,
+          isCampaign: true
+        }]);
+      }
+      return;
+    }
+
     if (confirm(`क्या आप ${name || 'ग्राहक'} (${phone}) को दोबारा AI तकादा कॉल लगाना चाहते हैं?`)) {
       this.startBatchAutoDial([{
         id: 'redial_' + Date.now(),
@@ -2568,9 +2688,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर डायरेक्टरी व अभियान में स्थायी सुरक्षित किए गए!`);
       this.switchCallTab('inauguration');
 
-      // Sequential auto-calling confirmation
-      if (confirm(`क्या आप इन सभी ${contacts.length} नंबरों पर एक-एक करके AI उद्घाटन आमंत्रण कॉल शुरू करना चाहते हैं?\n(एक कॉल समाप्त होने पर दूसरी अपने-आप लगेगी)`)) {
-        this.startSequentialCampaignDial(this.campaignContacts, promptText);
+      // Filter out ONLY the newly entered contacts to dial (zero interference with past list!)
+      const newlyAddedCleanSet = new Set(contacts.map(c => (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10)));
+      const newlyAddedToDial = (this.campaignContacts || []).filter(c => newlyAddedCleanSet.has((c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10)));
+      const targetListToDial = newlyAddedToDial.length > 0 ? newlyAddedToDial : contacts;
+
+      // Sequential auto-calling confirmation for ONLY newly added numbers
+      if (confirm(`क्या आप अभी जोड़े गए इन ${targetListToDial.length} नए नंबरों पर एक-एक करके AI उद्घाटन आमंत्रण कॉल शुरू करना चाहते हैं?\n(एक कॉल समाप्त होने पर दूसरी अपने-आप लगेगी)`)) {
+        this.startSequentialCampaignDial(targetListToDial, promptText);
       }
     } catch (err) {
       alert('त्रुटि: ' + err.message);
@@ -2664,8 +2789,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }).catch(() => {});
 
     // Dispatch call via Omnidimension Outgoing Bot (#276578)
+    let dispatchSuccess = false;
+    let dispatchErrorMsg = '';
     try {
-      await fetch('/api/omnidim/dispatch', {
+      const dispatchRes = await fetch('/api/omnidim/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2679,58 +2806,73 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           }
         })
       });
+      const dispatchData = await dispatchRes.json();
+      if (dispatchRes.ok && dispatchData.success) {
+        dispatchSuccess = true;
+      } else {
+        dispatchErrorMsg = dispatchData?.error || 'कॉल डिस्पैच विफल';
+      }
     } catch (err) {
+      dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
       console.warn('Call dispatch error:', err);
     }
 
-    if (statusEl) {
-      statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
-      statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
-    }
-
-    // STRICT 1-BY-1 REAL-TIME CALL OUTCOME TRACKING:
-    // Polls ultra-fast active call status endpoint every 2.5s until call terminates
-    const startTime = Date.now();
-    const maxPollTimeMs = 65000;
     let callEnded = false;
     let finalStatus = 'failed';
     let durationStr = '00:00';
     let summary = '';
     let audioUrl = null;
 
-    // Small initial wait of 2.5s before first check
-    await new Promise(r => setTimeout(r, 2500));
-
-    while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
-      if (!this.isCampaignCalling) return;
-      if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 1500));
-        continue;
-      }
-
-      try {
-        const statusRes = await fetch(`/api/omnidim/call-status/${contact.cleanPhone}`);
-        if (statusRes.ok) {
-          const statusData = await statusRes.json();
-          if (statusData.ended) {
-            callEnded = true;
-            finalStatus = statusData.status || 'failed';
-            durationStr = statusData.durationStr || '00:00';
-            summary = statusData.summary || '';
-            audioUrl = statusData.audioUrl || null;
-            break;
-          }
-        }
-      } catch (e) {
-        console.warn('Polling campaign call status error:', e);
-      }
-
-      await new Promise(r => setTimeout(r, 2500));
-    }
-
-    if (!callEnded) {
+    if (!dispatchSuccess) {
+      callEnded = true;
       finalStatus = 'failed';
-      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+      durationStr = '00:00';
+      summary = dispatchErrorMsg ? `कॉल नहीं लग सकी (${dispatchErrorMsg})` : 'कॉल प्रारंभ नहीं हो सकी';
+    } else {
+      if (statusEl) {
+        statusEl.innerText = '📞 फोन पर घंटी बज रही है... (स्थिति जांची जा रही है)';
+        statusEl.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-900 text-sky-200 border border-sky-700 animate-pulse';
+      }
+
+      // STRICT 1-BY-1 REAL-TIME CALL OUTCOME TRACKING:
+      // Polls ultra-fast active call status endpoint every 2.5s until call terminates
+      const startTime = Date.now();
+      const maxPollTimeMs = 65000;
+
+      // Small initial wait of 2.5s before first check
+      await new Promise(r => setTimeout(r, 2500));
+
+      while (!callEnded && (Date.now() - startTime) < maxPollTimeMs) {
+        if (!this.isCampaignCalling) return;
+        if (this.isAutoDialPaused) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+
+        try {
+          const statusRes = await fetch(`/api/omnidim/call-status/${contact.cleanPhone}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.ended) {
+              callEnded = true;
+              finalStatus = statusData.status || 'failed';
+              durationStr = statusData.durationStr || '00:00';
+              summary = statusData.summary || '';
+              audioUrl = statusData.audioUrl || null;
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn('Polling campaign call status error:', e);
+        }
+
+        await new Promise(r => setTimeout(r, 2500));
+      }
+
+      if (!callEnded) {
+        finalStatus = 'failed';
+        summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+      }
     }
 
     // Persist final status to server and state
