@@ -468,46 +468,180 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual((suffixEnd - suffixStart) + 1, 200);
   });
 
-  await t.test('Sequential Calling Invariant: Exactly one active call placed at a time, waits for termination before next call', () => {
+  await t.test('Concurrent Calling Invariant (Concurrency = 2): Exactly up to 2 active calls placed simultaneously from +918045440103 to different persons, pool replenishes as calls complete', () => {
     const queue = [
       { id: '1', phone: '9208321477', name: 'राकेश' },
-      { id: '2', phone: '9336317193', name: 'सुभाष' }
+      { id: '2', phone: '9336317193', name: 'सुभाष' },
+      { id: '3', phone: '9876543210', name: 'मोहन' },
+      { id: '4', phone: '9123456780', name: 'दिनेश' }
     ];
 
-    let activeCall = null;
+    const activeCalls = new Set();
     let maxSimultaneousCalls = 0;
     const callLogEvents = [];
 
     function dispatchCall(contact) {
-      if (activeCall !== null) {
-        throw new Error('VIOLATION: Multiple calls active simultaneously!');
+      if (activeCalls.size >= 2) {
+        throw new Error('VIOLATION: Exceeded concurrency limit of 2 calls!');
       }
-      activeCall = contact;
-      maxSimultaneousCalls = Math.max(maxSimultaneousCalls, 1);
-      callLogEvents.push({ type: 'start', phone: contact.phone });
+      activeCalls.add(contact.phone);
+      maxSimultaneousCalls = Math.max(maxSimultaneousCalls, activeCalls.size);
+      callLogEvents.push({ type: 'start', phone: contact.phone, activeCount: activeCalls.size });
     }
 
     function finishCall(contact) {
-      assert.strictEqual(activeCall.phone, contact.phone);
-      callLogEvents.push({ type: 'finish', phone: contact.phone });
-      activeCall = null;
+      assert(activeCalls.has(contact.phone), 'Cannot finish call that is not active');
+      activeCalls.delete(contact.phone);
+      callLogEvents.push({ type: 'finish', phone: contact.phone, activeCount: activeCalls.size });
     }
 
-    // Process item 1
+    // Line 1 takes Contact 1
     dispatchCall(queue[0]);
-    assert.strictEqual(maxSimultaneousCalls, 1);
-    // While call 1 is active, attempting to dispatch call 2 fails
-    assert.throws(() => dispatchCall(queue[1]), /Multiple calls active simultaneously/);
+    assert.strictEqual(activeCalls.size, 1);
 
-    // Call 1 completes
-    finishCall(queue[0]);
-
-    // Now call 2 can be dispatched
+    // Line 2 takes Contact 2 simultaneously
     dispatchCall(queue[1]);
-    finishCall(queue[1]);
+    assert.strictEqual(activeCalls.size, 2);
+    assert.strictEqual(maxSimultaneousCalls, 2);
 
-    assert.strictEqual(callLogEvents.length, 4);
-    assert.deepStrictEqual(callLogEvents.map(e => e.type), ['start', 'finish', 'start', 'finish']);
+    // Attempting to dispatch a 3rd call while 2 are active must throw violation
+    assert.throws(() => dispatchCall(queue[2]), /Exceeded concurrency limit of 2 calls/);
+
+    // Call 1 completes (Line 1 frees up)
+    finishCall(queue[0]);
+    assert.strictEqual(activeCalls.size, 1);
+
+    // Line 1 immediately picks up Contact 3
+    dispatchCall(queue[2]);
+    assert.strictEqual(activeCalls.size, 2);
+
+    // Call 2 completes (Line 2 frees up)
+    finishCall(queue[1]);
+    assert.strictEqual(activeCalls.size, 1);
+
+    // Line 2 immediately picks up Contact 4
+    dispatchCall(queue[3]);
+    assert.strictEqual(activeCalls.size, 2);
+
+    // Both finish
+    finishCall(queue[2]);
+    finishCall(queue[3]);
+    assert.strictEqual(activeCalls.size, 0);
+
+    // Verify all 4 were called without skipping
+    assert.strictEqual(callLogEvents.filter(e => e.type === 'start').length, 4);
+    assert.strictEqual(callLogEvents.filter(e => e.type === 'finish').length, 4);
+    assert.strictEqual(maxSimultaneousCalls, 2);
+  });
+
+  await t.test('Bulk Campaign Number Parser: Extracts all Indian numbers without skipping (spaces, dashes, commas, mixed names)', () => {
+    function parseInput(text) {
+      const contacts = [];
+      const seen = new Set();
+      const rawLines = (text || '').split(/[\r\n;|]+/);
+
+      for (const rawLine of rawLines) {
+        if (!rawLine.trim()) continue;
+        const subItems = rawLine.includes(',') ? rawLine.split(',') : [rawLine];
+        for (const item of subItems) {
+          const trimmed = item.trim();
+          if (!trimmed) continue;
+          const phoneRegex = /(?:(?:\+?91[\s-]?)|\b0)?\s*([6-9](?:[\s-]*\d){9})\b/g;
+          let match;
+          let matched = false;
+          while ((match = phoneRegex.exec(trimmed)) !== null) {
+            matched = true;
+            const fullMatchStr = match[0];
+            const clean10 = match[1].replace(/\D/g, '');
+            if (clean10.length === 10 && !seen.has(clean10)) {
+              seen.add(clean10);
+              let name = trimmed.replace(fullMatchStr, '').replace(/[-:–—()\t/,"']/g, ' ').replace(/\s+/g, ' ').trim();
+              if (!name || name.length < 2 || /^\d+$/.test(name)) name = 'ग्रामवासी / ग्राहक';
+              contacts.push({ name, cleanPhone: clean10 });
+            }
+          }
+          if (!matched) {
+            const digits = trimmed.replace(/\D/g, '');
+            if (digits.length >= 10) {
+              const last10 = digits.slice(-10);
+              if (/^[6-9]/.test(last10) && !seen.has(last10)) {
+                seen.add(last10);
+                contacts.push({ name: 'ग्रामवासी / ग्राहक', cleanPhone: last10 });
+              }
+            }
+          }
+        }
+      }
+      return contacts;
+    }
+
+    const testInput = `
+      8175044956
+      98765 43210
+      +91 92083-21477 (राकेश वर्मा)
+      सुरेश कुमार - 93363 17193
+      9123456780, 8877665544
+      रमेश 9876543211, महेश 9876543212
+    `;
+
+    const parsed = parseInput(testInput);
+    assert.strictEqual(parsed.length, 8, '8 विभिन्न नंबर बिना किसी छूट के पार्स होने चाहिए');
+    assert(parsed.some(c => c.cleanPhone === '9876543210'), 'स्पेस वाला नंबर 98765 43210 पार्स होना चाहिए');
+    assert(parsed.some(c => c.cleanPhone === '9208321477' && c.name === 'राकेश वर्मा'), 'राकेश वर्मा पार्स होना चाहिए');
+    assert(parsed.some(c => c.cleanPhone === '9336317193' && c.name === 'सुरेश कुमार'), 'सुरेश कुमार पार्स होना चाहिए');
+    assert(parsed.some(c => c.cleanPhone === '9876543211' && c.name === 'रमेश'), 'कॉमा के साथ पहला नाम पार्स होना चाहिए');
+    assert(parsed.some(c => c.cleanPhone === '9876543212' && c.name === 'महेश'), 'कॉमा के साथ दूसरा नाम पार्स होना चाहिए');
+  });
+
+  await t.test('Stale Call Log Rejection: /api/omnidim/call-status/:phone ignores logs older than dispatch timestamp', () => {
+    const logs = [
+      {
+        id: 1001,
+        to_number: '+919208321477',
+        call_status: 'completed',
+        call_duration_in_seconds: 45,
+        call_duration_in_minutes: 1,
+        time_of_call: '2026-11-02 10:00:00 UTC'
+      }
+    ];
+
+    const dispatchTime = new Date('2026-11-02 11:00:00 UTC').getTime();
+    const sinceMs = dispatchTime - 5000;
+
+    function findActiveCallLog(allLogs, clean, since) {
+      return allLogs.find(l => {
+        const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
+        const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
+        if (toClean !== clean && fromClean !== clean) return false;
+
+        if (since > 0) {
+          const rawTime = l.time_of_call || l.created_at || l.timestamp;
+          if (rawTime) {
+            const logMs = new Date(rawTime.endsWith('Z') ? rawTime : rawTime + ' UTC').getTime();
+            if (!isNaN(logMs) && logMs < (since - 10000)) {
+              return false; // Skip stale historical log!
+            }
+          }
+        }
+        return true;
+      });
+    }
+
+    const matchedStale = findActiveCallLog(logs, '9208321477', sinceMs);
+    assert.strictEqual(matchedStale, undefined, 'पुरानी कॉल का लॉग मैच नहीं होना चाहिए');
+
+    logs.unshift({
+      id: 1002,
+      to_number: '+919208321477',
+      call_status: 'completed',
+      call_duration_in_seconds: 30,
+      call_duration_in_minutes: 0,
+      time_of_call: '2026-11-02 11:00:15 UTC'
+    });
+
+    const matchedFresh = findActiveCallLog(logs, '9208321477', sinceMs);
+    assert(matchedFresh, 'नया ताजा कॉल लॉग मैच होना चाहिए');
+    assert.strictEqual(matchedFresh.id, 1002);
   });
 
   await t.test('Caller ID Enforcement & Same-Day Re-dialing Invariant', () => {

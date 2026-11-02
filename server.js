@@ -843,17 +843,29 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
       queryText: prompt || 'AI आउटगोइंग कॉल',
       responseText: omniSuccess ? 'Omnidimension AI एजेंट द्वारा कॉल प्रारंभ कर दी गई है' : 'कॉल कतार में जोड़ दी गई है',
       needsFollowUp: false,
-      status: omniSuccess ? 'dispatched' : 'initiated',
+      status: omniSuccess ? 'dispatched' : 'failed',
       omniResponse
     };
     if (!db.data.callLogs) db.data.callLogs = [];
     db.data.callLogs.unshift(localCall);
     db.save();
 
+    if (!omniSuccess) {
+      const errorMsg = omniResponse?.detail || omniResponse?.error || omniResponse?.message || 'Omnidimension कॉल डिस्पैच विफल';
+      return res.status(400).json({
+        success: false,
+        error: errorMsg,
+        call: localCall,
+        omniResponse
+      });
+    }
+
     res.json({
       success: true,
       message: `${formattedNumber} पर AI एजेंट कॉल प्रारंभ कर दी गई है`,
       call: localCall,
+      callId: omniResponse?.call_id || omniResponse?.id || null,
+      dispatchedAt: Date.now(),
       omniResponse
     });
   } catch (err) {
@@ -892,11 +904,29 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
 
     const allLogs = latestLogs.length > 0 ? latestLogs : (db.data.omnidimLogsCache || []);
     
-    // Find matching log for this phone number
+    // Find matching fresh log for this phone number (rejects stale logs from earlier calls)
+    const sinceMs = req.query.since ? parseInt(req.query.since, 10) : 0;
+    const targetCallId = req.query.callId;
+
     const matchingLog = allLogs.find(l => {
+      if (targetCallId && (String(l.id) === String(targetCallId) || String(l.call_id) === String(targetCallId))) {
+        return true;
+      }
       const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
       const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
-      return toClean === clean || fromClean === clean;
+      if (toClean !== clean && fromClean !== clean) return false;
+
+      // If since timestamp provided, only accept logs created at or after since (with 10s buffer for clock drift)
+      if (sinceMs > 0) {
+        const rawTime = l.time_of_call || l.created_at || l.timestamp;
+        if (rawTime) {
+          const logMs = new Date(rawTime.endsWith('Z') ? rawTime : rawTime + ' UTC').getTime();
+          if (!isNaN(logMs) && logMs < (sinceMs - 10000)) {
+            return false; // Skip stale historical log!
+          }
+        }
+      }
+      return true;
     });
 
     if (!matchingLog) {
@@ -1185,6 +1215,14 @@ app.post('/api/campaign/contacts', (req, res) => {
           };
           db.data.campaignContacts.push(newContact);
           added.push(newContact);
+        } else {
+          // If already in campaign, update name if a non-default name was provided, and reset status to pending for new campaign run
+          if (c.name && c.name.trim() && c.name.trim() !== 'ग्रामवासी / ग्राहक') {
+            existing.name = c.name.trim();
+          }
+          existing.status = 'pending';
+          existing.campaign = campaignName;
+          added.push(existing);
         }
       }
     });
