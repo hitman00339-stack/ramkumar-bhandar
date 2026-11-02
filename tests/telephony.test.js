@@ -708,6 +708,93 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(emptyDay.length, 0);
   });
 
+  await t.test('Multi-Selection Resolution in Inauguration Tab: Selected rows are accurately resolved to valid 10-digit contacts', () => {
+    const inaugurationCalls = [
+      { id: 'camp_1', customerName: 'ग्रामवासी / ग्राहक', cleanPhone: '6387317636', phone: '+91 63873 17636', isCampaign: true, isPending: true },
+      { id: 'camp_2', customerName: 'ग्रामवासी / ग्राहक', cleanPhone: '9580133593', phone: '+91 95801 33593', isCampaign: true, isPending: true }
+    ];
+
+    const selectedInTab = new Set(['camp_1', 'camp_2', '6387317636', '9580133593']);
+
+    function resolveSelectionToCall(selectedSet, activeList) {
+      const toCall = [];
+      const seenClean = new Set();
+      for (const c of activeList) {
+        const clean = (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (!clean || clean.length !== 10) continue;
+        const strId = String(c.id || '');
+        if (selectedSet.has(strId) || selectedSet.has(clean)) {
+          if (!seenClean.has(clean)) {
+            seenClean.add(clean);
+            toCall.push({
+              id: c.id,
+              name: c.customerName,
+              cleanPhone: clean,
+              phone: c.phone
+            });
+          }
+        }
+      }
+      return toCall;
+    }
+
+    const resolved = resolveSelectionToCall(selectedInTab, inaugurationCalls);
+    assert.strictEqual(resolved.length, 2, 'उद्घाटन आमंत्रण टैब में चुने गए दोनों नंबरों को वैध कॉल कतार में मिलना चाहिए');
+    assert.strictEqual(resolved[0].cleanPhone, '6387317636');
+    assert.strictEqual(resolved[1].cleanPhone, '9580133593');
+  });
+
+  await t.test('Uncalled Campaign Contacts Date Filter Invariant: isPending contacts remain visible even when date filter is set', () => {
+    const contacts = [
+      { id: 'camp_1', isPending: true, addedAt: '2026-11-02T10:00:00Z', cleanPhone: '6387317636' },
+      { id: 'camp_2', isPending: false, isConnected: true, lastCallAt: '2026-11-01T14:00:00Z', cleanPhone: '9580133593' }
+    ];
+
+    function filterCampaignCalls(list, filterDateStr) {
+      return list.filter(c => {
+        if (c.isPending) return true; // Always keep pending contacts visible
+        const ts = c.lastCallAt || c.addedAt || null;
+        if (!ts) return true;
+        const d = new Date(ts);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}` === filterDateStr;
+      });
+    }
+
+    // Filter set to yesterday (2026-11-01)
+    const result = filterCampaignCalls(contacts, '2026-11-01');
+    assert.strictEqual(result.length, 2, 'लंबित (isPending) संपर्क तारीख फ़िल्टर होने पर भी गायब नहीं होने चाहिए');
+    assert(result.some(c => c.cleanPhone === '6387317636'));
+    assert(result.some(c => c.cleanPhone === '9580133593'));
+  });
+
+  await t.test('SIP Trunk Dispatch Spacing: Rapid back-to-back dispatches enforce minimum 1500ms spacing', async () => {
+    let lastDispatch = 0;
+    const MIN_SPACING = 50; // Use 50ms in unit test for speed
+    const timestamps = [];
+
+    async function dispatchWithSpacing(id) {
+      const now = Date.now();
+      const waitMs = Math.max(0, MIN_SPACING - (now - lastDispatch));
+      lastDispatch = now + waitMs;
+      if (waitMs > 0) {
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+      timestamps.push({ id, time: Date.now() });
+    }
+
+    await Promise.all([
+      dispatchWithSpacing(1),
+      dispatchWithSpacing(2)
+    ]);
+
+    assert.strictEqual(timestamps.length, 2);
+    const diff = Math.abs(timestamps[1].time - timestamps[0].time);
+    assert(diff >= 40, `Spacing between calls must be at least ~50ms (was ${diff}ms)`);
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });

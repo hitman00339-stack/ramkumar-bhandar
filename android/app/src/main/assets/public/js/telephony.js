@@ -538,7 +538,7 @@ const TelephonyUI = {
       const durationSec = c.durationSec || 0;
       const isConnected = durationSec > 0 || c.status === 'completed' || c.statusLabel === 'सफल बात';
       return {
-        id: String(c.id),
+        id: String(c.id || ('local_' + Math.random())),
         phone: c.callerNumber || c.phone || 'नंबर नहीं',
         rawPhone: c.callerNumber || c.phone || '',
         customerName: c.customerName || 'ग्राहक',
@@ -622,7 +622,7 @@ const TelephonyUI = {
       const formatted = cleanPhone.length === 10 ? `+91 ${cleanPhone.slice(0, 5)} ${cleanPhone.slice(5)}` : (c.phone || cleanPhone);
 
       return {
-        id: String(c.id),
+        id: String(c.id || ('camp_' + (cleanPhone || Math.random()))),
         phone: formatted,
         rawPhone: cleanPhone,
         customerName: c.name || 'ग्रामवासी / ग्राहक',
@@ -851,8 +851,9 @@ const TelephonyUI = {
     if (this.dateFilter) {
       const filterDateStr = this.dateFilter;
       filteredInaugurationCalls = inaugurationCalls.filter(c => {
+        if (c.isPending) return true; // Always keep uncalled campaign contacts visible so user never loses unplaced calls!
         const ts = c.timestamp || c.addedAt || c.lastCallAt || c.time || null;
-        if (!ts) return true; // Keep uncalled campaign contacts visible so user never loses unplaced calls!
+        if (!ts) return true;
         try {
           const d = new Date(ts);
           if (isNaN(d.getTime())) return true;
@@ -1009,6 +1010,16 @@ const TelephonyUI = {
       totalAllList,
       inaugurationCalls: filteredInaugurationCalls
     };
+  },
+
+  getActiveTabList() {
+    const data = this.getProcessedData();
+    if (this.currentCallTab === 'connected') return data.connectedCalls || [];
+    if (this.currentCallTab === 'failed') return data.failedCalls || [];
+    if (this.currentCallTab === 'pending') return data.allPendingCalls || [];
+    if (this.currentCallTab === 'total_all') return data.totalAllList || [];
+    if (this.currentCallTab === 'inauguration') return data.inaugurationCalls || [];
+    return data.allCalls || [];
   },
 
   renderCurrentTab() {
@@ -1836,15 +1847,13 @@ const TelephonyUI = {
   // MULTI-SELECTION & BATCH ACTIONS
   // ----------------------------------------------------
   toggleSelectAllInTab(isChecked) {
-    const data = this.getProcessedData();
-    let targetList = data.allCalls;
-    if (this.currentCallTab === 'connected') targetList = data.connectedCalls;
-    else if (this.currentCallTab === 'failed') targetList = data.failedCalls;
-    else if (this.currentCallTab === 'pending') targetList = data.pendingCustomers;
-    else if (this.currentCallTab === 'total_all') targetList = data.totalAllList;
-
+    const targetList = this.getActiveTabList();
     if (isChecked) {
-      targetList.forEach(c => this.selectedInTab.add(c.id));
+      targetList.forEach(c => {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (c.id) this.selectedInTab.add(String(c.id));
+        if (clean && clean.length === 10) this.selectedInTab.add(clean);
+      });
     } else {
       this.selectedInTab.clear();
     }
@@ -1854,9 +1863,17 @@ const TelephonyUI = {
   toggleSelectAllFailed(isChecked) {
     const data = this.getProcessedData();
     if (isChecked) {
-      data.failedCalls.forEach(c => this.selectedInTab.add(c.id));
+      data.failedCalls.forEach(c => {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (c.id) this.selectedInTab.add(String(c.id));
+        if (clean && clean.length === 10) this.selectedInTab.add(clean);
+      });
     } else {
-      data.failedCalls.forEach(c => this.selectedInTab.delete(c.id));
+      data.failedCalls.forEach(c => {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (c.id) this.selectedInTab.delete(String(c.id));
+        if (clean && clean.length === 10) this.selectedInTab.delete(clean);
+      });
     }
     const countEl = document.getElementById('call-tab-selected-count');
     if (countEl) countEl.innerText = this.selectedInTab.size;
@@ -1874,12 +1891,7 @@ const TelephonyUI = {
   },
 
   exportToCsv() {
-    const data = this.getProcessedData();
-    let list = data.allCalls;
-    if (this.currentCallTab === 'connected') list = data.connectedCalls;
-    else if (this.currentCallTab === 'failed') list = data.failedCalls;
-    else if (this.currentCallTab === 'pending') list = data.pendingCustomers;
-    else if (this.currentCallTab === 'total_all') list = data.totalAllList;
+    const list = this.getActiveTabList();
 
     if (!list || list.length === 0) {
       alert('डाउनलोड करने के लिए कोई रिकॉर्ड उपलब्ध नहीं है');
@@ -1936,10 +1948,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   },
 
   toggleCustomerInTab(id, isChecked) {
+    const strId = String(id);
+    const clean = strId.replace(/\D/g, '').slice(-10);
     if (isChecked) {
-      this.selectedInTab.add(id);
+      this.selectedInTab.add(strId);
+      if (clean.length === 10) this.selectedInTab.add(clean);
     } else {
-      this.selectedInTab.delete(id);
+      this.selectedInTab.delete(strId);
+      if (clean.length === 10) this.selectedInTab.delete(clean);
     }
     const countEl = document.getElementById('call-tab-selected-count');
     if (countEl) countEl.innerText = this.selectedInTab.size;
@@ -1958,56 +1974,59 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
   startBatchDialFromTab() {
     const data = this.getProcessedData();
+    const activeList = this.getActiveTabList();
     let toCall = [];
 
-    if (this.selectedInTab.size > 0) {
-      // Find items in ALL sources including inauguration campaign contacts & pending calls
-      const allSources = [...data.allCalls, ...data.pendingCustomers, ...data.totalAllList, ...(data.inaugurationCalls || []), ...(data.allPendingCalls || [])];
-      // Deduplicate by ID
-      const seenIds = new Set();
-      const uniqueSources = allSources.filter(item => {
-        if (seenIds.has(item.id)) return false;
-        seenIds.add(item.id);
-        return true;
-      });
+    const allCandidates = [
+      ...activeList,
+      ...(data.inaugurationCalls || []),
+      ...(data.allPendingCalls || []),
+      ...(data.totalAllList || []),
+      ...(data.allCalls || []),
+      ...(this.campaignContacts || []),
+      ...(this.contactsBook || [])
+    ];
 
-      toCall = uniqueSources.filter(c => this.selectedInTab.has(c.id)).map(c => ({
-        id: c.id,
-        name: c.customerName || c.name || 'ग्राहक',
-        phone: c.rawPhone || c.phone,
-        cleanPhone: c.rawPhone || (c.phone || '').replace(/\D/g, '').slice(-10),
-        due: c.dueAmount || c.due || 0,
-        shopId: c.shopId || AppState.currentShopId,
-        campaign: c.isCampaign ? 'inauguration' : undefined
-      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
-    } else if (this.currentCallTab === 'failed') {
-      toCall = data.failedCalls.map(c => ({
-        id: c.id,
-        name: c.customerName,
-        phone: c.rawPhone || c.phone,
-        due: c.dueAmount || 0,
-        shopId: c.shopId
-      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
-    } else if (this.currentCallTab === 'pending') {
-      toCall = (data.allPendingCalls || []).map(c => ({
-        id: c.id,
-        name: c.customerName || c.name || 'ग्राहक',
-        phone: c.rawPhone || c.phone,
-        cleanPhone: c.cleanPhone || (c.phone || '').replace(/\D/g, '').slice(-10),
-        due: c.dueAmount || 0,
-        shopId: c.shopId || AppState.currentShopId,
-        campaign: c.isCampaign ? 'inauguration' : undefined
-      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
-    } else if (this.currentCallTab === 'inauguration') {
-      toCall = (data.inaugurationCalls || []).map(c => ({
-        id: c.id,
-        name: c.customerName,
-        phone: c.rawPhone || c.phone,
-        cleanPhone: c.rawPhone,
-        due: 0,
-        shopId: 'kirana',
-        campaign: 'inauguration'
-      })).filter(c => c.phone && c.phone.replace(/\D/g, '').length >= 10);
+    const seenClean = new Set();
+
+    if (this.selectedInTab.size > 0) {
+      for (const c of allCandidates) {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (!clean || clean.length !== 10) continue;
+        const strId = String(c.id || '');
+        if (this.selectedInTab.has(strId) || this.selectedInTab.has(clean) || this.selectedInTab.has(c.rawPhone)) {
+          if (!seenClean.has(clean)) {
+            seenClean.add(clean);
+            toCall.push({
+              id: c.id || ('dial_' + clean),
+              name: c.customerName || c.name || 'ग्रामवासी / ग्राहक',
+              phone: c.phone || (`+91 ${clean.slice(0, 5)} ${clean.slice(5)}`),
+              cleanPhone: clean,
+              due: c.dueAmount || c.due || 0,
+              shopId: c.shopId || (this.currentCallTab === 'inauguration' ? 'kirana' : AppState.currentShopId),
+              campaign: (this.currentCallTab === 'inauguration' || c.isCampaign) ? 'inauguration' : undefined
+            });
+          }
+        }
+      }
+    } else {
+      // If nothing explicitly checked, default to all items in current active tab (e.g. all pending, all inauguration)
+      for (const c of activeList) {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (!clean || clean.length !== 10) continue;
+        if (!seenClean.has(clean)) {
+          seenClean.add(clean);
+          toCall.push({
+            id: c.id || ('dial_' + clean),
+            name: c.customerName || c.name || 'ग्रामवासी / ग्राहक',
+            phone: c.phone || (`+91 ${clean.slice(0, 5)} ${clean.slice(5)}`),
+            cleanPhone: clean,
+            due: c.dueAmount || c.due || 0,
+            shopId: c.shopId || (this.currentCallTab === 'inauguration' ? 'kirana' : AppState.currentShopId),
+            campaign: (this.currentCallTab === 'inauguration' || c.isCampaign) ? 'inauguration' : undefined
+          });
+        }
+      }
     }
 
     if (toCall.length === 0) {
@@ -2227,9 +2246,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     AppState.showToast(`🚀 2-लाइन्स AI कॉलिंग प्रारंभ: कुल ${validList.length} नंबर (एक समय पर 2 कॉल्स समानांतर)`);
 
     // Launch 2 parallel workers (Concurrency = 2)
+    // Worker 0 starts immediately (Line 1); Worker 1 starts after 2000ms delay (Line 2)
+    // This prevents telecom SIP INVITE race conditions on the same outbound number (+918045440103)
     this.runCallWorker(0);
     if (validList.length > 1) {
-      this.runCallWorker(1);
+      setTimeout(() => {
+        if (this.isAutoDialing || this.isCampaignCalling) {
+          this.runCallWorker(1);
+        }
+      }, 2000);
     }
   },
 

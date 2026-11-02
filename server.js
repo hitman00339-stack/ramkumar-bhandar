@@ -778,11 +778,23 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
   }
 });
 
+// Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches
+let lastDispatchTimestamp = 0;
+const MIN_DISPATCH_SPACING_MS = 1500;
+
 app.post('/api/omnidim/dispatch', async (req, res) => {
   try {
     const { agentId, toNumber, prompt, context } = req.body;
     if (!toNumber) {
       return res.status(400).json({ success: false, error: 'कॉल करने के लिए मोबाइल नंबर आवश्यक है' });
+    }
+
+    // Ensure polite 1.5s spacing between calls to Omnidimension to avoid telecom carrier SIP race conditions
+    const now = Date.now();
+    const waitMs = Math.max(0, MIN_DISPATCH_SPACING_MS - (now - lastDispatchTimestamp));
+    lastDispatchTimestamp = now + waitMs;
+    if (waitMs > 0) {
+      await new Promise(r => setTimeout(r, waitMs));
     }
 
     const cleanNumber = toNumber.replace(/\D/g, '');
