@@ -2,7 +2,8 @@
 const TelephonyUI = {
   currentFilter: 'all',
   selectedWing: 'krishi', // 'krishi' | 'kirana'
-  currentCallTab: 'total_all',  // 'total_all' (कुल सुरक्षित नंबर) | 'inauguration' | 'connected' | 'failed' | 'pending' | 'all'
+  currentCallTab: 'total_all',  // 'total_all' (कुल सुरक्षित नंबर) | 'inauguration' | 'connected' | 'short' | 'failed' | 'pending' | 'all'
+  sideColumnTab: 'unconnected', // 'unconnected' | 'short' (<15s)
   currentWingFilter: 'all', // 'all' | 'krishi' | 'kirana'
   viewMode: 'spreadsheet', // 'spreadsheet' | 'split' | 'cards'
   searchQuery: '',
@@ -268,7 +269,7 @@ const TelephonyUI = {
     this.currentCallTab = tab;
     this.selectedInTab.clear();
 
-    const tabs = ['all', 'connected', 'failed', 'pending', 'total_all', 'inauguration'];
+    const tabs = ['all', 'connected', 'short', 'failed', 'pending', 'total_all', 'inauguration'];
     tabs.forEach(t => {
       const btn = document.getElementById(`tab-btn-${t}`);
       if (btn) {
@@ -280,6 +281,11 @@ const TelephonyUI = {
       }
     });
 
+    this.renderCurrentTab();
+  },
+
+  switchSideColumnTab(tab) {
+    this.sideColumnTab = tab;
     this.renderCurrentTab();
   },
 
@@ -347,23 +353,28 @@ const TelephonyUI = {
     const unconnSec = document.getElementById('section-unconnected-column');
     const btnTable = document.getElementById('btn-mobile-sec-table');
     const btnUnconn = document.getElementById('btn-mobile-sec-unconn');
+    const btnShort = document.getElementById('btn-mobile-sec-short');
 
     if (!tableSec || !unconnSec) return;
 
-    if (sec === 'unconnected') {
+    if (sec === 'unconnected' || sec === 'short') {
+      this.sideColumnTab = sec;
       tableSec.classList.add('hidden');
       tableSec.classList.remove('flex');
       unconnSec.classList.remove('hidden');
       unconnSec.classList.add('flex');
-      if (btnTable) btnTable.className = "flex-1 py-2 rounded-lg text-slate-600 flex items-center justify-center gap-1";
-      if (btnUnconn) btnUnconn.className = "flex-1 py-2 rounded-lg bg-rose-700 text-white shadow-xs font-bold flex items-center justify-center gap-1";
+      if (btnTable) btnTable.className = "flex-1 py-2 rounded-xl text-slate-600 flex items-center justify-center gap-1 font-semibold";
+      if (btnUnconn) btnUnconn.className = sec === 'unconnected' ? "flex-1 py-2 rounded-xl bg-rose-700 text-white shadow-xs font-bold flex items-center justify-center gap-1" : "flex-1 py-2 rounded-xl text-rose-700 flex items-center justify-center gap-1 font-semibold";
+      if (btnShort) btnShort.className = sec === 'short' ? "flex-1 py-2 rounded-xl bg-amber-600 text-white shadow-xs font-bold flex items-center justify-center gap-1" : "flex-1 py-2 rounded-xl text-amber-800 flex items-center justify-center gap-1 font-semibold";
+      this.renderCurrentTab();
     } else {
       unconnSec.classList.add('hidden');
       unconnSec.classList.remove('flex');
       tableSec.classList.remove('hidden');
       tableSec.classList.add('flex');
-      if (btnTable) btnTable.className = "flex-1 py-2 rounded-lg bg-white shadow-xs text-slate-900 font-bold flex items-center justify-center gap-1";
-      if (btnUnconn) btnUnconn.className = "flex-1 py-2 rounded-lg text-rose-700 flex items-center justify-center gap-1 font-semibold";
+      if (btnTable) btnTable.className = "flex-1 py-2 rounded-xl bg-white shadow-xs text-slate-900 font-bold flex items-center justify-center gap-1";
+      if (btnUnconn) btnUnconn.className = "flex-1 py-2 rounded-xl text-rose-700 flex items-center justify-center gap-1 font-semibold";
+      if (btnShort) btnShort.className = "flex-1 py-2 rounded-xl text-amber-800 flex items-center justify-center gap-1 font-semibold";
     }
   },
 
@@ -706,6 +717,33 @@ const TelephonyUI = {
 
     const connectedCalls = allCalls.filter(c => c.isConnected);
 
+    // Short Conversations (< 15 Seconds)
+    // Customers who picked up the call, but conversation was under 15 seconds (need follow-up)
+    const shortCalls = allCalls.filter(c => c.isConnected && c.durationSec > 0 && c.durationSec < 15);
+
+    // Short Calls Redial Queue: Strictly deduplicated by 10-digit number.
+    // If a customer had a longer conversation (>= 15s) later, they are automatically resolved!
+    const seenShortPhones = new Set();
+    const dedupedShortCalls = [];
+    for (const c of shortCalls) {
+      const clean = (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+      if (!clean || clean.length !== 10) continue;
+
+      const callTime = new Date(c.timestamp || c.time || 0).getTime();
+      const resolvedLater = callTime > 0 && allCalls.some(other => {
+        const otherClean = (other.rawPhone || other.phone || '').replace(/\D/g, '').slice(-10);
+        if (otherClean !== clean) return false;
+        if (!other.isConnected || other.durationSec < 15) return false;
+        const otherTime = new Date(other.timestamp || other.time || 0).getTime();
+        return otherTime > (callTime + 2000);
+      });
+
+      if (resolvedLater) continue;
+      if (seenShortPhones.has(clean)) continue;
+      seenShortPhones.add(clean);
+      dedupedShortCalls.push(c);
+    }
+
     // CRITICAL: Failed Calls (Unconnected) Resolution & Deduplication
     // 1. If any person who failed earlier subsequently connected or called back, REMOVE THEM COMPLETELY!
     // 2. Strictly deduplicate by 10-digit number so the redial queue has only 1 entry per customer.
@@ -1005,6 +1043,8 @@ const TelephonyUI = {
     return {
       allCalls,
       connectedCalls,
+      shortCalls,
+      dedupedShortCalls,
       failedCalls,
       pendingCustomers,
       allPendingCalls,
@@ -1016,6 +1056,7 @@ const TelephonyUI = {
   getActiveTabList() {
     const data = this.getProcessedData();
     if (this.currentCallTab === 'connected') return data.connectedCalls || [];
+    if (this.currentCallTab === 'short') return data.shortCalls || [];
     if (this.currentCallTab === 'failed') return data.failedCalls || [];
     if (this.currentCallTab === 'pending') return data.allPendingCalls || [];
     if (this.currentCallTab === 'total_all') return data.totalAllList || [];
@@ -1028,7 +1069,7 @@ const TelephonyUI = {
     if (!container) return;
 
     const data = this.getProcessedData();
-    const { allCalls, connectedCalls, failedCalls, pendingCustomers, allPendingCalls, totalAllList, inaugurationCalls } = data;
+    const { allCalls, connectedCalls, shortCalls, dedupedShortCalls, failedCalls, pendingCustomers, allPendingCalls, totalAllList, inaugurationCalls } = data;
 
     // Update KPI Card Displays
     const kpiTotal = document.getElementById('kpi-total-calls');
@@ -1043,12 +1084,14 @@ const TelephonyUI = {
     // Update Tab Badge Counts
     const bAll = document.getElementById('badge-count-all');
     const bConn = document.getElementById('badge-count-connected');
+    const bShort = document.getElementById('badge-count-short');
     const bFail = document.getElementById('badge-count-failed');
     const bPend = document.getElementById('badge-count-pending');
     const bTotAll = document.getElementById('badge-count-total_all');
     const bInaug = document.getElementById('badge-count-inauguration');
     if (bAll) bAll.innerText = allCalls.length;
     if (bConn) bConn.innerText = connectedCalls.length;
+    if (bShort) bShort.innerText = shortCalls.length;
     if (bFail) bFail.innerText = failedCalls.length;
     if (bPend) bPend.innerText = allPendingCalls.length;
     if (bTotAll) bTotAll.innerText = totalAllList.length;
@@ -1061,7 +1104,7 @@ const TelephonyUI = {
     if (selectedCountEl) selectedCountEl.innerText = selectedCount;
 
     if (toolbar) {
-      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'inauguration') {
+      if (selectedCount > 0 || this.currentCallTab === 'pending' || this.currentCallTab === 'failed' || this.currentCallTab === 'short' || this.currentCallTab === 'inauguration') {
         toolbar.classList.remove('hidden');
         toolbar.classList.add('flex');
       } else {
@@ -1075,6 +1118,8 @@ const TelephonyUI = {
     let isPendingTab = false;
     if (this.currentCallTab === 'connected') {
       activeList = connectedCalls;
+    } else if (this.currentCallTab === 'short') {
+      activeList = shortCalls;
     } else if (this.currentCallTab === 'failed') {
       activeList = failedCalls;
     } else if (this.currentCallTab === 'pending') {
@@ -1092,9 +1137,8 @@ const TelephonyUI = {
     } else if (this.viewMode === 'cards') {
       container.innerHTML = this.renderCardsView(activeList);
     } else {
-      // Default: Interactive Spreadsheet + Dedicated Not Connected Column
-      // Renders all uncalled/remaining calls in full multi-action spreadsheet!
-      container.innerHTML = this.renderSpreadsheetTable(activeList, failedCalls);
+      // Default: Interactive Spreadsheet + Dedicated Separate Column for Not Connected / Short Calls
+      container.innerHTML = this.renderSpreadsheetTable(activeList, failedCalls, dedupedShortCalls);
     }
   },
 
@@ -1102,7 +1146,7 @@ const TelephonyUI = {
   // 1. SPREADSHEET TABLE VIEW (स्प्रेडशीट लेजर दृश्य)
   // Left: Full Interactive Spreadsheet | Right: Dedicated Separate Column for Not Connected Numbers
   // ----------------------------------------------------
-  renderSpreadsheetTable(calls, failedCalls = []) {
+  renderSpreadsheetTable(calls, failedCalls = [], shortCalls = []) {
     if (!calls || calls.length === 0) {
       return `
         <div class="p-10 bg-white rounded-3xl text-center flex flex-col items-center justify-center gap-2 border border-slate-200 shadow-xs">
@@ -1115,17 +1159,22 @@ const TelephonyUI = {
 
     const allChecked = calls.length > 0 && calls.every(c => this.selectedInTab.has(c.id));
     const allFailedChecked = failedCalls.length > 0 && failedCalls.every(c => this.selectedInTab.has(c.id));
+    const allShortChecked = shortCalls.length > 0 && shortCalls.every(c => this.selectedInTab.has(c.id));
 
     return `
       <!-- MOBILE SEGMENTED SWITCHER (VISIBLE ON MOBILE/TABLET SCREENS) -->
-      <div class="flex lg:hidden items-center p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold w-full mb-3 shadow-2xs">
+      <div class="flex lg:hidden items-center p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold w-full mb-3 shadow-2xs gap-1">
         <button onclick="TelephonyUI.setMobileSection('spreadsheet')" id="btn-mobile-sec-table" class="flex-1 py-2 rounded-xl bg-white shadow-xs text-slate-900 font-bold flex items-center justify-center gap-1.5 cursor-pointer">
           <span class="material-symbols-outlined text-[16px]">table_chart</span>
-          <span>📊 स्प्रेडशीट टेबल (${calls.length})</span>
+          <span>📊 स्प्रेडशीट (${calls.length})</span>
         </button>
         <button onclick="TelephonyUI.setMobileSection('unconnected')" id="btn-mobile-sec-unconn" class="flex-1 py-2 rounded-xl text-rose-700 flex items-center justify-center gap-1.5 font-bold cursor-pointer">
           <span class="material-symbols-outlined text-[16px]">phone_missed</span>
           <span>❌ नहीं जुड़े (${failedCalls.length})</span>
+        </button>
+        <button onclick="TelephonyUI.setMobileSection('short')" id="btn-mobile-sec-short" class="flex-1 py-2 rounded-xl text-amber-800 flex items-center justify-center gap-1.5 font-bold cursor-pointer">
+          <span class="material-symbols-outlined text-[16px]">electric_bolt</span>
+          <span>⚡ <15s बात (${shortCalls.length})</span>
         </button>
       </div>
 
@@ -1178,7 +1227,7 @@ const TelephonyUI = {
                   <th class="p-3.5 whitespace-nowrap">स्थिति (Status)</th>
                   <th class="p-3.5 whitespace-nowrap min-w-[150px]">नंबर एवं ग्राहक (Customer)</th>
                   <th class="p-3.5 whitespace-nowrap">दिशा (Type)</th>
-                  <th class="p-3.5 whitespace-nowrap">अवधि</th>
+                  <th class="p-3.5 whitespace-nowrap">अवधि व स्तर</th>
                   <th class="p-3.5 min-w-[200px]">बातचीत सारांश व ट्रांसक्रिप्ट (Summary)</th>
                   <th class="p-3.5 whitespace-nowrap min-w-[170px]">ऑडियो रिकॉर्डिंग (Recording)</th>
                   <th class="p-3.5 whitespace-nowrap">तारीख व समय</th>
@@ -1243,11 +1292,23 @@ const TelephonyUI = {
                         </span>
                       </td>
 
-                      <!-- Duration -->
+                      <!-- Duration & Level -->
                       <td class="p-3 whitespace-nowrap">
-                        <span class="font-mono font-extrabold text-[12px] ${c.isConnected ? 'text-emerald-800' : 'text-slate-400'}">
-                          ⏱️ ${c.durationStr}
-                        </span>
+                        <div class="flex flex-col items-start gap-0.5">
+                          <span class="font-mono font-extrabold text-[12px] ${c.durationSec > 0 && c.durationSec < 15 ? 'text-amber-700' : (c.isConnected ? 'text-emerald-800' : 'text-slate-400')}">
+                            ⏱️ ${c.durationStr}
+                          </span>
+                          ${c.durationSec > 0 && c.durationSec < 15 ? `
+                            <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300" title="कॉल 15 सेकंड से पहले कट गई - पुनः आमंत्रण आवश्यक">
+                              <span class="material-symbols-outlined text-[10px] text-amber-700">electric_bolt</span>
+                              <span>< 15s कम बात</span>
+                            </span>
+                          ` : (c.durationSec >= 15 ? `
+                            <span class="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-md text-[9px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              <span>✅ पूर्ण बात</span>
+                            </span>
+                          ` : '')}
+                        </div>
                       </td>
 
                       <!-- Summary & Transcript Link -->
@@ -1310,71 +1371,164 @@ const TelephonyUI = {
           </div>
         </div>
 
-        <!-- DEDICATED SEPARATE COLUMN: NOT CONNECTED (अनुत्तरित / व्यस्त / फेल्ड) REDIAL QUEUE -->
-        <div class="lg:col-span-4 flex flex-col gap-3 bg-rose-50/70 p-4 rounded-3xl border-2 border-rose-300 shadow-sm" id="section-unconnected-column">
-          <div class="flex items-start justify-between pb-2.5 border-b border-rose-200 gap-2">
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="material-symbols-outlined text-rose-700 text-[22px]">phone_missed</span>
-                <h4 class="font-bold text-sm text-rose-950">❌ कनेक्ट नहीं हुए नंबर</h4>
-              </div>
-              <p class="text-[11px] text-rose-800 font-medium mt-0.5">अनुत्तरित, व्यस्त व नेटवर्क विफलता सूची</p>
-            </div>
-            <span class="px-2.5 py-1 rounded-full bg-rose-200 text-rose-900 text-xs font-bold font-numeric-display shrink-0">
-              ${failedCalls.length} नंबर
-            </span>
-          </div>
-
-          <!-- Quick Action Bar inside Dedicated Column -->
-          <div class="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-rose-200 shadow-xs">
-            <label class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
-              <input type="checkbox" ${allFailedChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllFailed(this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer"/>
-              <span>सबको चुनें</span>
-            </label>
-            <button onclick="TelephonyUI.redialAllFailed()" class="h-8 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
-              <span class="material-symbols-outlined text-[15px]">call</span>
-              <span>सबको दोबारा कॉल लगाएं</span>
+        <!-- DEDICATED SEPARATE COLUMN: NOT CONNECTED (अनुत्तरित / व्यस्त) OR SHORT CALLS (<15s) REDIAL QUEUE -->
+        <div class="lg:col-span-4 flex flex-col gap-3 ${this.sideColumnTab === 'short' ? 'bg-amber-50/70 border-amber-300' : 'bg-rose-50/70 border-rose-300'} p-4 rounded-3xl border-2 shadow-sm" id="section-unconnected-column">
+          
+          <!-- TOP COLUMN TAB SWITCHER -->
+          <div class="flex items-center p-1 bg-white/95 rounded-2xl border border-slate-200 shadow-2xs gap-1">
+            <button onclick="TelephonyUI.switchSideColumnTab('unconnected')" class="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${this.sideColumnTab !== 'short' ? 'bg-rose-700 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}">
+              <span class="material-symbols-outlined text-[15px]">phone_missed</span>
+              <span>❌ नहीं जुड़े (${failedCalls.length})</span>
+            </button>
+            <button onclick="TelephonyUI.switchSideColumnTab('short')" class="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${this.sideColumnTab === 'short' ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}">
+              <span class="material-symbols-outlined text-[15px]">electric_bolt</span>
+              <span>⚡ < 15s बात (${shortCalls.length})</span>
             </button>
           </div>
 
-          <!-- Failed Calls List -->
-          <div class="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
-            ${failedCalls.length === 0 ? `
-              <div class="p-6 bg-white rounded-2xl text-center border border-rose-200 text-xs text-slate-500">
-                🎉 बधाई! कोई भी नंबर बिना कनेक्ट हुआ नहीं बचा है। सभी नंबरों पर बातचीत हो चुकी है।
+          ${this.sideColumnTab === 'short' ? `
+            <!-- SHORT CALLS (< 15 SECONDS) SUB-PANEL -->
+            <div class="flex items-start justify-between pb-2.5 border-b border-amber-200 gap-2">
+              <div>
+                <div class="flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-amber-700 text-[22px]">electric_bolt</span>
+                  <h4 class="font-bold text-sm text-amber-950">⚡ कम बातचीत (< 15 सेकंड)</h4>
+                </div>
+                <p class="text-[11px] text-amber-800 font-medium mt-0.5">कॉल रिसीव हुई पर 15s से पहले कट गई • फॉलो-अप सूची</p>
               </div>
-            ` : failedCalls.map(c => `
-              <div class="p-3 bg-white rounded-2xl border border-rose-200 shadow-xs flex flex-col gap-2 hover:border-rose-300 transition-colors">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex items-center gap-2 min-w-0">
-                    <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer shrink-0"/>
-                    <div class="min-w-0">
-                      <span class="font-bold text-slate-900 text-xs truncate block">${c.customerName}</span>
-                      <span class="font-mono font-bold text-rose-800 text-xs">${c.phone}</span>
+              <span class="px-2.5 py-1 rounded-full bg-amber-200 text-amber-950 text-xs font-bold font-numeric-display shrink-0">
+                ${shortCalls.length} नंबर
+              </span>
+            </div>
+
+            <!-- Quick Action Bar for Short Calls -->
+            <div class="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-amber-200 shadow-xs">
+              <label class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
+                <input type="checkbox" ${allShortChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllShort(this.checked)" class="w-4 h-4 rounded accent-amber-600 cursor-pointer"/>
+                <span>सबको चुनें</span>
+              </label>
+              <button onclick="TelephonyUI.redialAllShort()" class="h-8 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                <span class="material-symbols-outlined text-[15px]">call</span>
+                <span>⚡ दोबारा कॉल लगाएं</span>
+              </button>
+            </div>
+
+            <!-- Short Calls List Cards -->
+            <div class="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
+              ${shortCalls.length === 0 ? `
+                <div class="p-6 bg-white rounded-2xl text-center border border-amber-200 text-xs text-slate-500">
+                  🎉 कोई भी बातचीत 15 सेकंड से कम की नहीं रही! सभी कॉल्स पूरी और विस्तृत रहीं।
+                </div>
+              ` : shortCalls.map(c => `
+                <div class="p-3 bg-white rounded-2xl border border-amber-200 shadow-xs flex flex-col gap-2 hover:border-amber-300 transition-colors">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-amber-600 cursor-pointer shrink-0"/>
+                      <div class="min-w-0">
+                        <span class="font-bold text-slate-900 text-xs truncate block">${c.customerName}</span>
+                        <span class="font-mono font-bold text-amber-900 text-xs">${c.phone}</span>
+                      </div>
+                    </div>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0 font-numeric-display">
+                      ⏱️ ${c.durationStr} (${c.durationSec}s)
+                    </span>
+                  </div>
+
+                  ${c.summary ? `
+                    <div class="text-[11px] text-slate-600 bg-amber-50/50 p-2 rounded-xl border border-amber-100 line-clamp-2">
+                      ${c.summary}
+                    </div>
+                  ` : ''}
+
+                  ${c.audioUrl ? `
+                    <div class="pt-0.5">
+                      <audio controls preload="metadata" class="h-7 w-full rounded border border-slate-200 bg-slate-50" src="${TelephonyUI.getAudioStreamUrl(c.audioUrl)}"></audio>
+                    </div>
+                  ` : ''}
+
+                  <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
+                    <span class="text-[10px] text-slate-400 font-medium">${c.time}</span>
+                    <div class="flex items-center gap-1.5">
+                      <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-7 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                        <span class="material-symbols-outlined text-[13px]">call</span>
+                        <span>कॉल करें</span>
+                      </button>
+                      ${c.rawPhone ? `
+                        <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20कट%20गया%20था।%20कृपया%20उद्घाटन%20आमंत्रण%20हेतु%20पुनः%20बात%20करें।" target="_blank" class="h-7 w-7 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center justify-center border border-emerald-200 active:scale-95" title="व्हाट्सऐप भेजें">
+                          <span class="material-symbols-outlined text-[14px] text-emerald-700">chat</span>
+                        </a>
+                      ` : ''}
                     </div>
                   </div>
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 shrink-0">
-                    ${c.failReason || 'नहीं उठा (00:00)'}
-                  </span>
                 </div>
+              `).join('')}
+            </div>
+          ` : `
+            <!-- FAILED CALLS (NOT CONNECTED) SUB-PANEL -->
+            <div class="flex items-start justify-between pb-2.5 border-b border-rose-200 gap-2">
+              <div>
+                <div class="flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-rose-700 text-[22px]">phone_missed</span>
+                  <h4 class="font-bold text-sm text-rose-950">❌ कनेक्ट नहीं हुए नंबर</h4>
+                </div>
+                <p class="text-[11px] text-rose-800 font-medium mt-0.5">अनुत्तरित, व्यस्त व नेटवर्क विफलता सूची</p>
+              </div>
+              <span class="px-2.5 py-1 rounded-full bg-rose-200 text-rose-900 text-xs font-bold font-numeric-display shrink-0">
+                ${failedCalls.length} नंबर
+              </span>
+            </div>
 
-                <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
-                  <span class="text-[10px] text-slate-400 font-medium">${c.time}</span>
-                  <div class="flex items-center gap-1.5">
-                    <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-7 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
-                      <span class="material-symbols-outlined text-[13px]">call</span>
-                      <span>कॉल करें</span>
-                    </button>
-                    ${c.rawPhone ? `
-                      <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20नहीं%20लग%20सकी।" target="_blank" class="h-7 w-7 rounded-xl bg-emerald-50 text-emerald-900 flex items-center justify-center border border-emerald-200" title="व्हाट्सऐप भेजें">
-                        <span class="material-symbols-outlined text-[14px] text-emerald-700">chat</span>
-                      </a>
-                    ` : ''}
+            <!-- Quick Action Bar inside Dedicated Column -->
+            <div class="flex items-center justify-between bg-white p-2.5 rounded-2xl border border-rose-200 shadow-xs">
+              <label class="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
+                <input type="checkbox" ${allFailedChecked ? 'checked' : ''} onchange="TelephonyUI.toggleSelectAllFailed(this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer"/>
+                <span>सबको चुनें</span>
+              </label>
+              <button onclick="TelephonyUI.redialAllFailed()" class="h-8 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                <span class="material-symbols-outlined text-[15px]">call</span>
+                <span>सबको दोबारा कॉल लगाएं</span>
+              </button>
+            </div>
+
+            <!-- Failed Calls List -->
+            <div class="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
+              ${failedCalls.length === 0 ? `
+                <div class="p-6 bg-white rounded-2xl text-center border border-rose-200 text-xs text-slate-500">
+                  🎉 बधाई! कोई भी नंबर बिना कनेक्ट हुआ नहीं बचा है। सभी नंबरों पर बातचीत हो चुकी है।
+                </div>
+              ` : failedCalls.map(c => `
+                <div class="p-3 bg-white rounded-2xl border border-rose-200 shadow-xs flex flex-col gap-2 hover:border-rose-300 transition-colors">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <input type="checkbox" ${this.selectedInTab.has(c.id) ? 'checked' : ''} onchange="TelephonyUI.toggleCustomerInTab('${c.id}', this.checked)" class="w-4 h-4 rounded accent-rose-600 cursor-pointer shrink-0"/>
+                      <div class="min-w-0">
+                        <span class="font-bold text-slate-900 text-xs truncate block">${c.customerName}</span>
+                        <span class="font-mono font-bold text-rose-800 text-xs">${c.phone}</span>
+                      </div>
+                    </div>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 shrink-0">
+                      ${c.failReason || 'नहीं उठा (00:00)'}
+                    </span>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
+                    <span class="text-[10px] text-slate-400 font-medium">${c.time}</span>
+                    <div class="flex items-center gap-1.5">
+                      <button onclick="TelephonyUI.redialCustomer('${c.rawPhone || c.phone}', '${c.customerName}')" class="h-7 px-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer">
+                        <span class="material-symbols-outlined text-[13px]">call</span>
+                        <span>कॉल करें</span>
+                      </button>
+                      ${c.rawPhone ? `
+                        <a href="https://wa.me/${c.rawPhone.replace(/\D/g, '')}?text=नमस्ते%20${encodeURIComponent(c.customerName)}%20जी,%20रामकुमार%20भंडार%20से%20कॉल%20नहीं%20लग%20सकी।" target="_blank" class="h-7 w-7 rounded-xl bg-emerald-50 text-emerald-900 flex items-center justify-center border border-emerald-200" title="व्हाट्सऐप भेजें">
+                          <span class="material-symbols-outlined text-[14px] text-emerald-700">chat</span>
+                        </a>
+                      ` : ''}
+                    </div>
                   </div>
                 </div>
-              </div>
-            `).join('')}
-          </div>
+              `).join('')}
+            </div>
+          `}
         </div>
 
       </div>
@@ -1891,6 +2045,37 @@ const TelephonyUI = {
     this.renderCurrentTab();
   },
 
+  toggleSelectAllShort(isChecked) {
+    const data = this.getProcessedData();
+    const shortList = data.dedupedShortCalls || data.shortCalls || [];
+    if (isChecked) {
+      shortList.forEach(c => {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (c.id) this.selectedInTab.add(String(c.id));
+        if (clean && clean.length === 10) this.selectedInTab.add(clean);
+      });
+    } else {
+      shortList.forEach(c => {
+        const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
+        if (c.id) this.selectedInTab.delete(String(c.id));
+        if (clean && clean.length === 10) this.selectedInTab.delete(clean);
+      });
+    }
+    const countEl = document.getElementById('call-tab-selected-count');
+    if (countEl) countEl.innerText = this.selectedInTab.size;
+    const toolbar = document.getElementById('call-tab-toolbar');
+    if (toolbar) {
+      if (this.selectedInTab.size > 0) {
+        toolbar.classList.remove('hidden');
+        toolbar.classList.add('flex');
+      } else {
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+      }
+    }
+    this.renderCurrentTab();
+  },
+
   exportToCsv() {
     const list = this.getActiveTabList();
 
@@ -2066,6 +2251,40 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
     if (confirm(`क्या आप इन सभी ${toDial.length} अनुत्तरित नंबरों पर दोबारा AI कॉल लगाना चाहते हैं?`)) {
       this.startBatchAutoDial(toDial);
+    }
+  },
+
+  redialAllShort() {
+    const data = this.getProcessedData();
+    const sourceList = (data.dedupedShortCalls && data.dedupedShortCalls.length > 0) ? data.dedupedShortCalls : (data.shortCalls || []);
+    const toDial = sourceList.map(c => ({
+      id: c.id,
+      customerName: c.customerName || 'ग्रामवासी / ग्राहक',
+      name: c.customerName || 'ग्रामवासी / ग्राहक',
+      phone: c.phone,
+      rawPhone: (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10),
+      cleanPhone: (c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10),
+      due: c.dueAmount || 0,
+      shopId: c.shopId || 'kirana',
+      isCampaign: true
+    })).filter(c => c.cleanPhone && c.cleanPhone.length === 10);
+
+    const seen = new Set();
+    const uniqueToDial = [];
+    for (const item of toDial) {
+      if (!seen.has(item.cleanPhone)) {
+        seen.add(item.cleanPhone);
+        uniqueToDial.push(item);
+      }
+    }
+
+    if (uniqueToDial.length === 0) {
+      alert('15 सेकंड से कम बातचीत वाला कोई नंबर नहीं मिला');
+      return;
+    }
+
+    if (confirm(`क्या आप इन सभी ${uniqueToDial.length} नंबरों (कम बातचीत <15s) पर 2-लाइन AI से दोबारा आमंत्रण कॉल लगाना चाहते हैं?`)) {
+      this.startSequentialCampaignDial(uniqueToDial);
     }
   },
 

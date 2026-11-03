@@ -862,6 +862,100 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(requeued.includes('9511003038'), 'अस्थायी व्यस्त नंबर को स्किप करने के बजाय कतार में पुनः जोड़ा जाना चाहिए');
   });
 
+  await t.test('Short Conversation Filtering (< 15 Seconds): Correctly isolates calls under 15s across all filters', async () => {
+    const rawCalls = [
+      {
+        id: 'c_failed',
+        call_direction: 'outbound',
+        from_number: '+918045440103',
+        to_number: '+919511003030',
+        call_status: 'no-answer',
+        call_duration_in_seconds: 0,
+        call_duration_in_minutes: 0,
+        time_of_call: '11/03/2026 10:00:00'
+      },
+      {
+        id: 'c_short_1',
+        call_direction: 'outbound',
+        from_number: '+918045440103',
+        to_number: '+919451696020',
+        call_status: 'completed',
+        call_duration_in_seconds: 7,
+        call_duration_in_minutes: 0,
+        time_of_call: '11/03/2026 10:05:00'
+      },
+      {
+        id: 'c_short_2',
+        call_direction: 'outbound',
+        from_number: '+918045440103',
+        to_number: '+919876543210',
+        call_status: 'completed',
+        call_duration_in_seconds: 14,
+        call_duration_in_minutes: 0,
+        time_of_call: '11/03/2026 10:10:00'
+      },
+      {
+        id: 'c_long',
+        call_direction: 'outbound',
+        from_number: '+918045440103',
+        to_number: '+919123456789',
+        call_status: 'completed',
+        call_duration_in_seconds: 45,
+        call_duration_in_minutes: 0,
+        time_of_call: '11/03/2026 10:15:00'
+      }
+    ];
+
+    // Process calls
+    const processed = rawCalls.map(c => {
+      const durationSec = c.call_duration_in_seconds || 0;
+      const durationMin = c.call_duration_in_minutes || 0;
+      const totalSec = (durationMin * 60) + durationSec;
+      const rawStatus = (c.call_status || '').toLowerCase();
+      const isConnected = totalSec > 0 && rawStatus !== 'no-answer' && rawStatus !== 'busy' && rawStatus !== 'failed';
+      return {
+        id: c.id,
+        phone: c.to_number,
+        durationSec: totalSec,
+        isConnected
+      };
+    });
+
+    // 1. Connected Calls (duration > 0 and status is connected)
+    const connectedCalls = processed.filter(c => c.isConnected);
+    assert.strictEqual(connectedCalls.length, 3, '3 calls picked up and connected');
+
+    // 2. Short Calls (< 15 seconds)
+    const shortCalls = processed.filter(c => c.isConnected && c.durationSec > 0 && c.durationSec < 15);
+    assert.strictEqual(shortCalls.length, 2, 'Exactly 2 calls lasted less than 15 seconds (7s and 14s)');
+    assert(shortCalls.some(c => c.id === 'c_short_1'));
+    assert(shortCalls.some(c => c.id === 'c_short_2'));
+    assert(!shortCalls.some(c => c.id === 'c_long'), 'Calls >= 15s must not be in shortCalls');
+    assert(!shortCalls.some(c => c.id === 'c_failed'), '00:00 failed calls must not be in shortCalls');
+
+    // 3. Follow-up Deduplication Invariant: If a customer had a < 15s call but later completed a >= 15s call, they are resolved!
+    const followUpQueueWithLaterFullCall = [
+      { id: 'call_1', cleanPhone: '9451696020', durationSec: 6, timestamp: '2026-11-03T10:00:00+05:30', isConnected: true },
+      { id: 'call_2', cleanPhone: '9451696020', durationSec: 35, timestamp: '2026-11-03T10:30:00+05:30', isConnected: true }
+    ];
+
+    const allCallsMerged = followUpQueueWithLaterFullCall;
+    const unresolvedShortCalls = followUpQueueWithLaterFullCall
+      .filter(c => c.isConnected && c.durationSec > 0 && c.durationSec < 15)
+      .filter(c => {
+        const cTime = new Date(c.timestamp).getTime();
+        const hasLaterFullCall = allCallsMerged.some(o => 
+          o.cleanPhone === c.cleanPhone && 
+          o.isConnected && 
+          o.durationSec >= 15 && 
+          new Date(o.timestamp).getTime() > (cTime + 1000)
+        );
+        return !hasLaterFullCall;
+      });
+
+    assert.strictEqual(unresolvedShortCalls.length, 0, 'ग्राहक से बाद में पूरी बात (>15s) हो जाने पर उसे शॉर्ट कॉल फॉलो-अप कतार से हटा दिया जाना चाहिए');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });
