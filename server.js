@@ -832,32 +832,51 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     let omniResponse = null;
     let omniSuccess = false;
-    try {
-      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          agent_id: targetAgentId,
-          to_number: formattedNumber,
-          from_number_id: FROM_NUMBER_ID,
-          from_number: FROM_NUMBER,
-          caller_id: FROM_NUMBER,
-          phone_number: FROM_NUMBER,
-          call_context: {
-            customer_name: context?.customerName || 'किसान भाई',
-            due_amount: String(context?.amount || '0'),
-            shop_name: context?.shopName || 'रामकुमार खाद भंडार',
-            instruction: prompt || 'उधार बकाया भुगतान'
-          }
-        })
-      });
-      omniResponse = await response.json();
-      omniSuccess = response.ok;
-    } catch (e) {
-      console.warn('Omnidim live dispatch error:', e.message);
+    // Auto-retry on carrier trunk / concurrency limit with 2.2s delay for SIP channel teardown
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        const response = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            agent_id: targetAgentId,
+            to_number: formattedNumber,
+            from_number_id: FROM_NUMBER_ID,
+            from_number: FROM_NUMBER,
+            caller_id: FROM_NUMBER,
+            phone_number: FROM_NUMBER,
+            call_context: {
+              customer_name: context?.customerName || 'किसान भाई',
+              due_amount: String(context?.amount || '0'),
+              shop_name: context?.shopName || 'रामकुमार खाद भंडार',
+              instruction: prompt || 'उधार बकाया भुगतान'
+            }
+          })
+        });
+        omniResponse = await response.json();
+        omniSuccess = response.ok;
+
+        if (omniSuccess) break;
+
+        const errorStr = (omniResponse?.detail || omniResponse?.error_description || omniResponse?.error || omniResponse?.message || '').toLowerCase();
+        const isConcurrency = /concurrency|limit|busy|channel|active|simultaneous/i.test(errorStr);
+
+        if (isConcurrency && attempt < 6) {
+          console.log(`[Omnidim Dispatch] Concurrency limit active, waiting 2.2s for channel release (attempt ${attempt}/6)...`);
+          await new Promise(r => setTimeout(r, 2200));
+          continue;
+        }
+        break;
+      } catch (e) {
+        console.warn(`Omnidim live dispatch error (attempt ${attempt}/6):`, e.message);
+        if (attempt < 6) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+      }
     }
 
     // Record outbound call in local logs
@@ -1238,7 +1257,7 @@ app.post('/api/campaign/contacts', (req, res) => {
     db.saveContactsBookBulk(contacts, campaignName);
 
     contacts.forEach(c => {
-      const rawPhone = String(c.phone || '').trim();
+      const rawPhone = String(c.cleanPhone || c.phone || '').trim();
       const cleanDigits = rawPhone.replace(/\D/g, '');
       if (cleanDigits.length >= 10) {
         const last10 = cleanDigits.slice(-10);

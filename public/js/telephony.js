@@ -56,7 +56,11 @@ const TelephonyUI = {
 
     // 2. Render IMMEDIATELY from cached state (Instant numbers and table!)
     this.updateContactsBookBadges();
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
 
     // 3. Smooth background fetch over internet
     this.refreshAllData();
@@ -75,7 +79,11 @@ const TelephonyUI = {
       this.fetchCampaignContacts(),
       this.fetchLiveOmnidimLogs(true)
     ]);
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   setupListeners() {
@@ -148,7 +156,11 @@ const TelephonyUI = {
     this.renderMasterCard();
     this.renderSyncBanner();
     this.renderInquiryTopics();
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   renderMasterCard() {
@@ -262,7 +274,11 @@ const TelephonyUI = {
         }
       }
     });
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   switchCallTab(tab) {
@@ -281,12 +297,20 @@ const TelephonyUI = {
       }
     });
 
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   switchSideColumnTab(tab) {
     this.sideColumnTab = tab;
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   switchCallWingFilter(wing) {
@@ -302,12 +326,20 @@ const TelephonyUI = {
         }
       }
     });
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   handleSearch(val) {
     this.searchQuery = (val || '').trim().toLowerCase();
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   setDateFilter(dateVal) {
@@ -325,7 +357,11 @@ const TelephonyUI = {
         badge.innerHTML = '';
       }
     }
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   setQuickDateFilter(preset) {
@@ -366,7 +402,11 @@ const TelephonyUI = {
       if (btnTable) btnTable.className = "flex-1 py-2 rounded-xl text-slate-600 flex items-center justify-center gap-1 font-semibold";
       if (btnUnconn) btnUnconn.className = sec === 'unconnected' ? "flex-1 py-2 rounded-xl bg-rose-700 text-white shadow-xs font-bold flex items-center justify-center gap-1" : "flex-1 py-2 rounded-xl text-rose-700 flex items-center justify-center gap-1 font-semibold";
       if (btnShort) btnShort.className = sec === 'short' ? "flex-1 py-2 rounded-xl bg-amber-600 text-white shadow-xs font-bold flex items-center justify-center gap-1" : "flex-1 py-2 rounded-xl text-amber-800 flex items-center justify-center gap-1 font-semibold";
+      try {
       this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
     } else {
       unconnSec.classList.add('hidden');
       unconnSec.classList.remove('flex');
@@ -401,7 +441,11 @@ const TelephonyUI = {
     } catch (err) {
       console.warn('Omnidim live logs fetch skipped:', err.message);
     }
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   // Process & Merge All Omnidim Calls + Local Calls + Pending Customers
@@ -2015,7 +2059,11 @@ const TelephonyUI = {
     } else {
       this.selectedInTab.clear();
     }
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   toggleSelectAllFailed(isChecked) {
@@ -2045,7 +2093,11 @@ const TelephonyUI = {
         toolbar.classList.remove('flex');
       }
     }
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   toggleSelectAllShort(isChecked) {
@@ -2076,7 +2128,11 @@ const TelephonyUI = {
         toolbar.classList.remove('flex');
       }
     }
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   exportToCsv() {
@@ -2158,7 +2214,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
   clearSelectionInTab() {
     this.selectedInTab.clear();
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
   },
 
   startBatchDialFromTab() {
@@ -2569,7 +2629,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const campMatch = (this.campaignContacts || []).find(c => c.cleanPhone === cleanPhone || c.id === contact.id);
     if (campMatch) {
       campMatch.status = 'calling';
+      try {
       this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
     }
     fetch('/api/campaign/update-status', {
       method: 'POST',
@@ -2616,16 +2680,16 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           break;
         } else {
           dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
-          if (attempt < 4) {
-            // Fast silent retry without changing UI text
-            await new Promise(r => setTimeout(r, 600));
+          if (attempt < 5) {
+            // Wait 2.2s before retry so carrier trunk channel clears
+            await new Promise(r => setTimeout(r, 2200));
             continue;
           }
         }
       } catch (err) {
         dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
-        if (attempt < 4) {
-          await new Promise(r => setTimeout(r, 600));
+        if (attempt < 5) {
+          await new Promise(r => setTimeout(r, 1500));
           continue;
         }
       }
@@ -2641,10 +2705,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       // ZERO-SKIP INVARIANT: If carrier trunk channel was temporarily unavailable,
       // re-queue the number to the end of the queue so it is called when channel frees up!
       if (!contact.requeueCount) contact.requeueCount = 0;
-      if (contact.requeueCount < 3) {
+      if (contact.requeueCount < 5) {
         contact.requeueCount++;
         this.activeQueue.push(contact);
-        this.totalQueued = this.activeQueue.length;
+        // Do NOT increment this.totalQueued so banner denominator stays fixed
         this.updateCallingBanner();
         return { success: false, requeued: true };
       }
@@ -2676,7 +2740,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         campMatch.summary = summary;
         campMatch.lastCallAt = new Date().toISOString();
       }
+      try {
       this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
       return { success: false, finalStatus, summary };
     }
 
@@ -2761,7 +2829,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       campMatch.lastCallAt = new Date().toISOString();
     }
 
-    this.renderCurrentTab();
+    try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
     return { success: true, finalStatus, durationStr, summary, audioUrl };
   },
 
@@ -2844,13 +2916,13 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const contacts = [];
     const seen = new Set();
 
-    // Split text by newlines, semicolons, or pipe delimiters
-    const rawLines = raw.split(/[\r\n;|]+/);
+    // Split text by newlines, semicolons, pipes, or slashes
+    const rawLines = raw.split(/[\r\n;|/]+/);
 
     for (const rawLine of rawLines) {
       if (!rawLine.trim()) continue;
 
-      // Also split line if it has comma-separated items (even with names)
+      // Also split line if it has comma-separated items
       const subItems = rawLine.includes(',') ? rawLine.split(',') : [rawLine];
 
       for (const item of subItems) {
@@ -2872,8 +2944,12 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
             const clean10 = rawDigits;
             if (!seen.has(clean10)) {
               seen.add(clean10);
-              let name = trimmed.replace(fullMatchStr, '').replace(/[-:–—()\t/,"']/g, ' ').replace(/\s+/g, ' ').trim();
-              if (!name || name.length < 2 || /^\d+$/.test(name)) {
+              let name = trimmed.replace(fullMatchStr, '')
+                .replace(/^[\s\d.()[\]•\-–—*#:]+/, '') // Strip leading bullet or list numbering e.g. '1.', '(1)'
+                .replace(/[-:–—()\t/,"'+91]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              if (!name || name.length < 2 || /^[\d\s+\-_.]+$/.test(name)) {
                 name = 'ग्रामवासी / ग्राहक';
               }
               contacts.push({
@@ -2892,8 +2968,12 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
             const last10 = digitsOnly.slice(-10);
             if (/^[6-9]/.test(last10) && !seen.has(last10)) {
               seen.add(last10);
-              let name = trimmed.replace(new RegExp(last10), '').replace(/[-:–—()\t/,"'+91]/g, ' ').replace(/\s+/g, ' ').trim();
-              if (!name || name.length < 2 || /^\d+$/.test(name)) {
+              let name = trimmed.replace(new RegExp(last10), '')
+                .replace(/^[\s\d.()[\]•\-–—*#:]+/, '')
+                .replace(/[-:–—()\t/,"'+91]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              if (!name || name.length < 2 || /^[\d\s+\-_.]+$/.test(name)) {
                 name = 'ग्रामवासी / ग्राहक';
               }
               contacts.push({
@@ -2936,7 +3016,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         } catch (e) {}
 
         this.updateContactsBookBadges();
-        this.renderCurrentTab();
+        try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
       }
     } catch (err) {
       console.warn('Fetch contacts book error:', err.message);
@@ -3111,7 +3195,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         }
         const bInaug = document.getElementById('badge-count-inauguration');
         if (bInaug) bInaug.innerText = this.campaignContacts.length;
-        this.renderCurrentTab();
+        try {
+      this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
       }
     } catch (err) {
       console.warn('Campaign contacts fetch skipped:', err.message);
@@ -3191,10 +3279,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       AppState.showToast(`🎉 ${data.addedCount || contacts.length} नंबर डायरेक्टरी व अभियान में स्थायी सुरक्षित किए गए!`);
       this.switchCallTab('inauguration');
 
-      // Filter out ONLY the newly entered contacts to dial (zero interference with past list!)
-      const newlyAddedCleanSet = new Set(contacts.map(c => (c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10)));
-      const newlyAddedToDial = (this.campaignContacts || []).filter(c => newlyAddedCleanSet.has((c.cleanPhone || c.phone || '').replace(/\D/g, '').slice(-10)));
-      const targetListToDial = newlyAddedToDial.length > 0 ? newlyAddedToDial : contacts;
+      // Dial the EXACT list of contacts the user just entered - 100% coverage, zero skips!
+      const targetListToDial = contacts.map(c => ({
+        id: 'dial_' + c.cleanPhone + '_' + Date.now(),
+        name: c.name || 'ग्रामवासी / ग्राहक',
+        cleanPhone: c.cleanPhone,
+        phone: c.phone || (`+91 ${c.cleanPhone.slice(0, 5)} ${c.cleanPhone.slice(5)}`),
+        prompt: promptText || null,
+        campaign: 'inauguration'
+      }));
 
       // 2-line parallel AI calling confirmation for newly added numbers
       if (confirm(`क्या आप अभी जोड़े गए इन ${targetListToDial.length} नए नंबरों पर 2-लाइन AI उद्घाटन आमंत्रण कॉल शुरू करना चाहते हैं?\n(एक समय पर 2 कॉल्स एक साथ लगेंगी)`)) {
@@ -3610,7 +3703,11 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       }
 
       AppState.showToast('✓ व्यक्तिगत डेटा भविष्य की कॉल्स के लिए सुरक्षित कर लिया गया!');
+      try {
       this.renderCurrentTab();
+    } catch (e) {
+      console.warn('renderCurrentTab error in worker:', e);
+    }
     } catch (err) {
       alert('त्रुटि: ' + err.message);
     }

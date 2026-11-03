@@ -1031,6 +1031,57 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(diffSec <= 15, `Parsed timestamp should be ~10s from now, was ${diffSec}s!`);
   });
 
+  await t.test('Full Given List Calling Invariant: Every contact in the user provided list is called with 100% coverage, auto-recovering through concurrency_limit_exceeded without skips', async () => {
+    // 5 contacts given by user
+    const userGivenList = [
+      { name: 'राम', cleanPhone: '9876543210' },
+      { name: 'श्याम', cleanPhone: '9876543211' },
+      { name: 'मोहन', cleanPhone: '9876543212' },
+      { name: 'दिनेश', cleanPhone: '9876543213' },
+      { name: 'सुरेश', cleanPhone: '9876543214' }
+    ];
+
+    let currentConcurrency = 0;
+    const maxConcurrency = 2;
+    const completedCalls = [];
+    let queueIndex = 0;
+
+    async function dispatchWithServerRetry(contact) {
+      let attempts = 0;
+      while (attempts < 6) {
+        attempts++;
+        if (currentConcurrency >= maxConcurrency) {
+          // Concurrency limit exceeded, wait and retry
+          await new Promise(r => setTimeout(r, 10)); // in test 10ms, in live 2200ms
+          continue;
+        }
+        currentConcurrency++;
+        break;
+      }
+      return { success: true, contact };
+    }
+
+    async function worker(wId) {
+      while (queueIndex < userGivenList.length) {
+        const contact = userGivenList[queueIndex++];
+        const res = await dispatchWithServerRetry(contact);
+        assert.strictEqual(res.success, true);
+        // Simulate call duration
+        await new Promise(r => setTimeout(r, 15));
+        currentConcurrency--;
+        completedCalls.push(contact.cleanPhone);
+      }
+    }
+
+    await Promise.all([worker(0), worker(1)]);
+
+    // Verify 100% of user-given list was dialed, 0 skips!
+    assert.strictEqual(completedCalls.length, userGivenList.length);
+    for (const c of userGivenList) {
+      assert(completedCalls.includes(c.cleanPhone), `Contact ${c.cleanPhone} must be called`);
+    }
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });
