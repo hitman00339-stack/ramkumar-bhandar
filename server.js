@@ -864,9 +864,11 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     if (!omniSuccess) {
       const errorMsg = omniResponse?.detail || omniResponse?.error || omniResponse?.message || 'Omnidimension कॉल डिस्पैच विफल';
+      const isConcurrency = /concurrency|limit|busy|channel|active|simultaneous/i.test(errorMsg);
       return res.status(400).json({
         success: false,
         error: errorMsg,
+        isConcurrencyLimit: isConcurrency,
         call: localCall,
         omniResponse
       });
@@ -876,7 +878,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
       success: true,
       message: `${formattedNumber} पर AI एजेंट कॉल प्रारंभ कर दी गई है`,
       call: localCall,
-      callId: omniResponse?.call_id || omniResponse?.id || null,
+      callId: omniResponse?.requestId || omniResponse?.call_id || omniResponse?.id || null,
       dispatchedAt: Date.now(),
       omniResponse
     });
@@ -921,7 +923,12 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
     const targetCallId = req.query.callId;
 
     const matchingLog = allLogs.find(l => {
-      if (targetCallId && (String(l.id) === String(targetCallId) || String(l.call_id) === String(targetCallId))) {
+      if (targetCallId && (
+        String(l.id) === String(targetCallId) ||
+        String(l.call_id) === String(targetCallId) ||
+        String(l.requestId) === String(targetCallId) ||
+        String(l.request_id) === String(targetCallId)
+      )) {
         return true;
       }
       const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
@@ -929,10 +936,12 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       if (toClean !== clean && fromClean !== clean) return false;
 
       // If since timestamp provided, only accept logs created at or after since (with 10s buffer for clock drift)
+      // Note: Omnidimension logs time_of_call in IST (+05:30)
       if (sinceMs > 0) {
         const rawTime = l.time_of_call || l.created_at || l.timestamp;
         if (rawTime) {
-          const logMs = new Date(rawTime.endsWith('Z') ? rawTime : rawTime + ' UTC').getTime();
+          const timeWithZone = (rawTime.endsWith('Z') || rawTime.includes('+')) ? rawTime : (rawTime + ' +05:30');
+          const logMs = new Date(timeWithZone).getTime();
           if (!isNaN(logMs) && logMs < (sinceMs - 10000)) {
             return false; // Skip stale historical log!
           }

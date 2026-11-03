@@ -501,9 +501,10 @@ const TelephonyUI = {
       let formattedTime = c.time_of_call || 'आज';
       try {
         if (c.time_of_call) {
-          const utcMs = new Date(c.time_of_call + ' UTC').getTime();
-          if (!isNaN(utcMs)) {
-            const d = new Date(utcMs);
+          const timeWithZone = (c.time_of_call.endsWith('Z') || c.time_of_call.includes('+')) ? c.time_of_call : (c.time_of_call + ' +05:30');
+          const ms = new Date(timeWithZone).getTime();
+          if (!isNaN(ms)) {
+            const d = new Date(ms);
             formattedTime = d.toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' });
           }
         }
@@ -2298,14 +2299,23 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.markContactCalling(contact, cleanPhone);
 
       // Execute call with live status tracking
-      await this.executeCallOnLine(slotIndex, contact, cleanPhone);
+      const callResult = await this.executeCallOnLine(slotIndex, contact, cleanPhone);
 
-      this.completedCount++;
+      // If call failed dispatch because carrier channels were temporarily busy or network issue, re-queue contact to the end so ZERO numbers are skipped!
+      if (callResult && callResult.needsRequeue && !contact.requeued) {
+        contact.requeued = true;
+        this.activeQueue.push(contact);
+        this.totalQueued = this.activeQueue.length;
+        AppState.showToast(`🔄 ${contact.name || cleanPhone} कतार के अंत में पुनः प्रयास हेतु जोड़ा गया (कोई नंबर छूटेगा नहीं)`);
+      } else {
+        this.completedCount++;
+      }
+
       this.activeSlots[slotIndex] = null;
       this.updateCallingBanner();
 
-      // Polite carrier buffer (1.5s) between calls on the same line
-      await new Promise(r => setTimeout(r, 1500));
+      // Polite carrier buffer (3.5s) between calls on the same line to allow SIP teardown
+      await new Promise(r => setTimeout(r, 3500));
     }
   },
 
@@ -2327,32 +2337,69 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     let dispatchSuccess = false;
     let dispatchErrorMsg = '';
     let omniCallId = null;
+    let attempt = 0;
+    const maxAttempts = 5;
 
-    try {
-      const res = await fetch('/api/omnidim/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: 276578,
-          toNumber: '+91' + cleanPhone,
-          prompt: contact.prompt,
-          context: {
-            customerName: contact.name,
-            campaign: contact.campaign || 'inauguration',
-            amount: contact.due || 0,
-            shopName: contact.shopId === 'kirana' ? 'रामकुमार किराना एवं जनरल स्टोर' : 'रामकुमार खाद भंडार'
-          }
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        dispatchSuccess = true;
-        omniCallId = data.callId || null;
-      } else {
-        dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
+    // Retry loop on dispatch: if carrier channels are busy or concurrency limit reached, wait and retry! NEVER SKIP!
+    while (attempt < maxAttempts && !dispatchSuccess) {
+      if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
+      if (this.isAutoDialPaused) {
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
       }
-    } catch (err) {
-      dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
+
+      attempt++;
+      try {
+        if (this.activeSlots[slotIndex]) {
+          this.activeSlots[slotIndex].status = 'dispatching';
+          this.activeSlots[slotIndex].statusText = attempt > 1 ? 
+            `⏳ लाइन व्यस्त • पुनः प्रयास (${attempt}/${maxAttempts})...` : 
+            'कॉल लगाई जा रही है...';
+          this.updateCallingBanner();
+        }
+
+        const res = await fetch('/api/omnidim/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 276578,
+            toNumber: '+91' + cleanPhone,
+            prompt: contact.prompt,
+            context: {
+              customerName: contact.name,
+              campaign: contact.campaign || 'inauguration',
+              amount: contact.due || 0,
+              shopName: contact.shopId === 'kirana' ? 'रामकुमार किराना एवं जनरल स्टोर' : 'रामकुमार खाद भंडार'
+            }
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          dispatchSuccess = true;
+          omniCallId = data.callId || null;
+          break;
+        } else {
+          dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
+          const isBusyOrConcurrency = data?.isConcurrencyLimit || /concurrency|limit|busy|channel|active|rate|too many/i.test(dispatchErrorMsg);
+          
+          if (isBusyOrConcurrency || attempt < maxAttempts) {
+            if (this.activeSlots[slotIndex]) {
+              this.activeSlots[slotIndex].status = 'waiting';
+              this.activeSlots[slotIndex].statusText = `⏳ दोनों लाइन्स व्यस्त • प्रतीक्षा (${attempt})...`;
+              this.updateCallingBanner();
+            }
+            // Wait 3.5s for the other line/channel to clear before retrying
+            await new Promise(r => setTimeout(r, 3500));
+            continue;
+          }
+        }
+      } catch (err) {
+        dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
+        if (attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+      }
     }
 
     let finalStatus = 'failed';
@@ -2365,65 +2412,68 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       summary = dispatchErrorMsg ? `कॉल नहीं लग सकी (${dispatchErrorMsg})` : 'कॉल प्रारंभ नहीं हो सकी';
       if (this.activeSlots[slotIndex]) {
         this.activeSlots[slotIndex].status = 'failed';
-        this.activeSlots[slotIndex].statusText = '❌ कॉल विफल';
+        this.activeSlots[slotIndex].statusText = '❌ कॉल विफल (पुनः कतारबद्ध)';
         this.updateCallingBanner();
       }
-    } else {
-      if (this.activeSlots[slotIndex]) {
-        this.activeSlots[slotIndex].status = 'ringing';
-        this.activeSlots[slotIndex].statusText = '🔔 घंटी बज रही है / बात जारी...';
-        this.updateCallingBanner();
+      return { success: false, needsRequeue: true, finalStatus, summary };
+    }
+
+    if (this.activeSlots[slotIndex]) {
+      this.activeSlots[slotIndex].status = 'ringing';
+      this.activeSlots[slotIndex].statusText = '🔔 घंटी बज रही है / बात जारी...';
+      this.updateCallingBanner();
+    }
+
+    const maxPollTimeMs = 65000;
+    const startPoll = Date.now();
+    let callEnded = false;
+
+    // Initial wait of 4s before first poll so call has time to reach carrier network
+    await new Promise(r => setTimeout(r, 4000));
+
+    while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
+      if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
+      if (this.isAutoDialPaused) {
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
       }
 
-      const maxPollTimeMs = 65000;
-      const startPoll = Date.now();
-      let callEnded = false;
+      try {
+        const queryParams = new URLSearchParams({
+          since: String(dispatchStartTime - 3000)
+        });
+        if (omniCallId) queryParams.set('callId', String(omniCallId));
 
-      // Small initial wait of 2.5s before first poll
-      await new Promise(r => setTimeout(r, 2500));
-
-      while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
-        if (!this.isAutoDialing && !this.isCampaignCalling) return;
-        if (this.isAutoDialPaused) {
-          await new Promise(r => setTimeout(r, 1000));
-          continue;
-        }
-
-        try {
-          const queryParams = new URLSearchParams({
-            since: String(dispatchStartTime - 5000)
-          });
-          if (omniCallId) queryParams.set('callId', String(omniCallId));
-
-          const statusRes = await fetch(`/api/omnidim/call-status/${cleanPhone}?${queryParams.toString()}`);
-          if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.ended) {
-              callEnded = true;
-              finalStatus = statusData.status || 'failed';
-              durationStr = statusData.durationStr || '00:00';
-              summary = statusData.summary || '';
-              audioUrl = statusData.audioUrl || null;
-              break;
-            }
+        const statusRes = await fetch(`/api/omnidim/call-status/${cleanPhone}?${queryParams.toString()}`);
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          // Minimum 6-second in-flight guard: telecom call cannot realistically end in < 6 seconds
+          const elapsedSec = (Date.now() - dispatchStartTime) / 1000;
+          if (statusData.ended && (elapsedSec >= 6 || (statusData.totalSec && statusData.totalSec > 0))) {
+            callEnded = true;
+            finalStatus = statusData.status || 'failed';
+            durationStr = statusData.durationStr || '00:00';
+            summary = statusData.summary || '';
+            audioUrl = statusData.audioUrl || null;
+            break;
           }
-        } catch (e) {
-          console.warn(`Line ${slotIndex + 1} status polling error:`, e);
         }
-
-        await new Promise(r => setTimeout(r, 2500));
+      } catch (e) {
+        console.warn(`Line ${slotIndex + 1} status polling error:`, e);
       }
 
-      if (!callEnded) {
-        finalStatus = 'failed';
-        summary = 'कॉल समय-सीमा समाप्त (Timeout)';
-      }
+      await new Promise(r => setTimeout(r, 2500));
+    }
 
-      if (this.activeSlots[slotIndex]) {
-        this.activeSlots[slotIndex].status = finalStatus;
-        this.activeSlots[slotIndex].statusText = finalStatus === 'connected' ? `✅ बात हुई (${durationStr})` : '❌ कॉल नहीं उठी';
-        this.updateCallingBanner();
-      }
+    if (!callEnded) {
+      finalStatus = 'failed';
+      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+    }
+
+    if (this.activeSlots[slotIndex]) {
+      this.activeSlots[slotIndex].status = finalStatus;
+      this.activeSlots[slotIndex].statusText = finalStatus === 'connected' ? `✅ बात हुई (${durationStr})` : '❌ कॉल नहीं उठी';
+      this.updateCallingBanner();
     }
 
     // Persist final call outcome

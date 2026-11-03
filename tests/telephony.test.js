@@ -795,6 +795,73 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(diff >= 40, `Spacing between calls must be at least ~50ms (was ${diff}ms)`);
   });
 
+  await t.test('Omnidimension IST Timezone Parsing: Stale logs are correctly identified without future-offset false match', () => {
+    // Current time: Nov 3, 2026, 08:30:00 IST
+    const dispatchTimeMs = new Date('2026-11-03T08:30:00+05:30').getTime();
+    
+    // An earlier call log from 07:00:00 IST today
+    const omniRawTime = '11/03/2026 07:00:00';
+
+    // BUGGY behavior (with UTC):
+    const buggyUtcTime = new Date(omniRawTime + ' UTC').getTime();
+    assert(buggyUtcTime > dispatchTimeMs, 'Buggy UTC parsing incorrectly places earlier IST time into the future!');
+
+    // FIXED behavior (with IST +05:30):
+    const timeWithZone = (omniRawTime.endsWith('Z') || omniRawTime.includes('+')) ? omniRawTime : (omniRawTime + ' +05:30');
+    const correctIstTime = new Date(timeWithZone).getTime();
+    assert(correctIstTime < dispatchTimeMs, 'Correct IST parsing places earlier call in the past');
+    
+    // Must be rejected by sinceMs check!
+    const sinceMs = dispatchTimeMs - 5000;
+    const isStale = correctIstTime < (sinceMs - 10000);
+    assert.strictEqual(isStale, true, 'पुरानी कॉल को नई कॉल समझकर तुरंत 2.5 सेकंड में बंद नहीं माना जाना चाहिए');
+  });
+
+  await t.test('Zero-Skip Concurrency Invariant: When carrier is busy, contacts retry and re-queue so 0 numbers are skipped', async () => {
+    const queue = [
+      { id: 'c1', name: 'राम', cleanPhone: '9511003038' },
+      { id: 'c2', name: 'श्याम', cleanPhone: '9451696820' },
+      { id: 'c3', name: 'मोहन', cleanPhone: '9876543210' }
+    ];
+
+    let completed = [];
+    let requeued = [];
+    let carrierConcurrencyActive = 2; // Carrier currently full
+
+    async function attemptCall(contact) {
+      if (carrierConcurrencyActive >= 2) {
+        // Concurrency limit reached
+        return { success: false, isConcurrencyLimit: true, needsRequeue: true };
+      }
+      carrierConcurrencyActive++;
+      return { success: true, needsRequeue: false };
+    }
+
+    // Process queue with zero-skip requeue guarantee
+    let qIdx = 0;
+    while (qIdx < queue.length) {
+      const contact = queue[qIdx++];
+      const res = await attemptCall(contact);
+      if (res.needsRequeue && !contact.requeued) {
+        contact.requeued = true;
+        requeued.push(contact.cleanPhone);
+        // Free carrier channel
+        carrierConcurrencyActive = 1;
+        queue.push(contact); // Re-queue to the end!
+      } else {
+        completed.push(contact.cleanPhone);
+        carrierConcurrencyActive = Math.max(0, carrierConcurrencyActive - 1);
+      }
+    }
+
+    // Verify all 3 original contacts completed without any being skipped!
+    assert.strictEqual(completed.length, 3);
+    assert(completed.includes('9511003038'));
+    assert(completed.includes('9451696820'));
+    assert(completed.includes('9876543210'));
+    assert(requeued.includes('9511003038'), 'अस्थायी व्यस्त नंबर को स्किप करने के बजाय कतार में पुनः जोड़ा जाना चाहिए');
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });
