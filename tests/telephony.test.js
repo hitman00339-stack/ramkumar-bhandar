@@ -591,7 +591,7 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(parsed.some(c => c.cleanPhone === '9876543212' && c.name === 'महेश'), 'कॉमा के साथ दूसरा नाम पार्स होना चाहिए');
   });
 
-  await t.test('Stale Call Log Rejection: /api/omnidim/call-status/:phone ignores logs older than dispatch timestamp', () => {
+  await t.test('Stale Call Log Rejection: /api/omnidim/call-status/:phone ignores logs older than dispatch timestamp and isolates targetCallId without premature termination', () => {
     const logs = [
       {
         id: 1001,
@@ -599,15 +599,25 @@ test('AI Telephony Agent Integration Tests', async (t) => {
         call_status: 'completed',
         call_duration_in_seconds: 45,
         call_duration_in_minutes: 1,
-        time_of_call: '2026-11-02 10:00:00 UTC'
+        time_of_call: '2026-11-02 10:00:00 UTC',
+        call_request_id: { id: 9999 }
       }
     ];
 
     const dispatchTime = new Date('2026-11-02 11:00:00 UTC').getTime();
-    const sinceMs = dispatchTime - 5000;
+    const sinceMs = dispatchTime - 3000;
 
-    function findActiveCallLog(allLogs, clean, since) {
+    function findActiveCallLog(allLogs, clean, since, targetCallId) {
       return allLogs.find(l => {
+        if (targetCallId) {
+          return (
+            String(l.id) === String(targetCallId) ||
+            String(l.call_id) === String(targetCallId) ||
+            String(l.requestId) === String(targetCallId) ||
+            String(l.request_id) === String(targetCallId) ||
+            String(l.call_request_id?.id) === String(targetCallId)
+          );
+        }
         const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
         const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
         if (toClean !== clean && fromClean !== clean) return false;
@@ -616,7 +626,7 @@ test('AI Telephony Agent Integration Tests', async (t) => {
           const rawTime = l.time_of_call || l.created_at || l.timestamp;
           if (rawTime) {
             const logMs = new Date(rawTime.endsWith('Z') ? rawTime : rawTime + ' UTC').getTime();
-            if (!isNaN(logMs) && logMs < (since - 10000)) {
+            if (!isNaN(logMs) && logMs < (since - 3000)) {
               return false; // Skip stale historical log!
             }
           }
@@ -625,21 +635,30 @@ test('AI Telephony Agent Integration Tests', async (t) => {
       });
     }
 
+    // 1. Without targetCallId: Stale log older than sinceMs must NOT match
     const matchedStale = findActiveCallLog(logs, '9208321477', sinceMs);
     assert.strictEqual(matchedStale, undefined, 'पुरानी कॉल का लॉग मैच नहीं होना चाहिए');
 
+    // 2. With targetCallId that hasn't arrived yet in logs: Must return undefined (NOT match the old log for this phone!)
+    const targetCallId = 10108259;
+    const notYetArrived = findActiveCallLog(logs, '9208321477', sinceMs, targetCallId);
+    assert.strictEqual(notYetArrived, undefined, 'जब तक नए कॉल का requestId लॉग में न आए, पुरानी कॉल को मैच करके कॉल नहीं काटनी चाहिए');
+
+    // 3. Fresh log arrives with matching call_request_id.id
     logs.unshift({
       id: 1002,
       to_number: '+919208321477',
       call_status: 'completed',
       call_duration_in_seconds: 30,
       call_duration_in_minutes: 0,
-      time_of_call: '2026-11-02 11:00:15 UTC'
+      time_of_call: '2026-11-02 11:00:15 UTC',
+      call_request_id: { id: 10108259 }
     });
 
-    const matchedFresh = findActiveCallLog(logs, '9208321477', sinceMs);
+    const matchedFresh = findActiveCallLog(logs, '9208321477', sinceMs, targetCallId);
     assert(matchedFresh, 'नया ताजा कॉल लॉग मैच होना चाहिए');
     assert.strictEqual(matchedFresh.id, 1002);
+    assert.strictEqual(matchedFresh.call_request_id.id, 10108259);
   });
 
   await t.test('Caller ID Enforcement & Same-Day Re-dialing Invariant', () => {
@@ -815,7 +834,7 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(isStale, true, 'पुरानी कॉल को नई कॉल समझकर तुरंत 2.5 सेकंड में बंद नहीं माना जाना चाहिए');
   });
 
-  await t.test('2-Line Parallel Zero-Skip Invariant: Every contact in queue is called across parallel workers without any number being skipped or "पुनः प्रयास" spam', async () => {
+  await t.test('2-Line Parallel Zero-Skip Invariant: Every contact in queue is called across parallel workers without any number being skipped or "पुनः प्रयास" spam, with carrier busy re-queue guarantee', async () => {
     const queue = [
       { id: 'c1', name: 'राम', cleanPhone: '9511003038' },
       { id: 'c2', name: 'श्याम', cleanPhone: '9451696820' },
@@ -826,11 +845,22 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     let queueIndex = 0;
     const completed = [];
     const activeSlots = [null, null];
+    let simulatedCarrierLock = true; // First attempt on c2 will simulate temporary carrier busy
 
     async function runWorker(slotIndex) {
       while (queueIndex < queue.length) {
         const contact = queue[queueIndex++];
         activeSlots[slotIndex] = contact.cleanPhone;
+
+        // If c2 encounters temporary carrier trunk busy on first attempt:
+        if (contact.cleanPhone === '9451696820' && simulatedCarrierLock) {
+          simulatedCarrierLock = false; // Carrier frees up
+          contact.requeueCount = (contact.requeueCount || 0) + 1;
+          queue.push(contact); // Re-queue to back so 0 numbers are skipped!
+          activeSlots[slotIndex] = null;
+          continue;
+        }
+
         // simulate async call
         await new Promise(r => setTimeout(r, 10));
         completed.push(contact.cleanPhone);
@@ -841,10 +871,10 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     // Launch 2 parallel workers (Concurrency = 2)
     await Promise.all([runWorker(0), runWorker(1)]);
 
-    // Verify all 4 original contacts completed without any being skipped!
+    // Verify all 4 original contacts completed without any being skipped, even with carrier busy!
     assert.strictEqual(completed.length, 4);
     assert(completed.includes('9511003038'));
-    assert(completed.includes('9451696820'));
+    assert(completed.includes('9451696820'), 'Carrier busy number was successfully re-queued and dialed');
     assert(completed.includes('9876543210'));
     assert(completed.includes('9123456780'));
   });

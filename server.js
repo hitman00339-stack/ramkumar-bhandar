@@ -780,7 +780,7 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
 
 // Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches
 let lastDispatchTimestamp = 0;
-const MIN_DISPATCH_SPACING_MS = 1500;
+const MIN_DISPATCH_SPACING_MS = 2500;
 
 app.post('/api/omnidim/dispatch', async (req, res) => {
   try {
@@ -789,7 +789,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
       return res.status(400).json({ success: false, error: 'कॉल करने के लिए मोबाइल नंबर आवश्यक है' });
     }
 
-    // Ensure polite 1.5s spacing between calls to Omnidimension to avoid telecom carrier SIP race conditions
+    // Ensure polite 2.5s spacing between calls to Omnidimension to avoid telecom carrier SIP race conditions
     const now = Date.now();
     const waitMs = Math.max(0, MIN_DISPATCH_SPACING_MS - (now - lastDispatchTimestamp));
     lastDispatchTimestamp = now + waitMs;
@@ -923,26 +923,30 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
     const targetCallId = req.query.callId;
 
     const matchingLog = allLogs.find(l => {
-      if (targetCallId && (
-        String(l.id) === String(targetCallId) ||
-        String(l.call_id) === String(targetCallId) ||
-        String(l.requestId) === String(targetCallId) ||
-        String(l.request_id) === String(targetCallId)
-      )) {
-        return true;
+      if (targetCallId) {
+        // Match specific call by id or Omnidimension call_request_id.id
+        const matchesId = (
+          String(l.id) === String(targetCallId) ||
+          String(l.call_id) === String(targetCallId) ||
+          String(l.requestId) === String(targetCallId) ||
+          String(l.request_id) === String(targetCallId) ||
+          String(l.call_request_id?.id) === String(targetCallId)
+        );
+        // If targetCallId is specified, ONLY match by targetCallId! Never fall back to older calls to same phone
+        return matchesId;
       }
       const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
       const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
       if (toClean !== clean && fromClean !== clean) return false;
 
-      // If since timestamp provided, only accept logs created at or after since (with 10s buffer for clock drift)
+      // If since timestamp provided, only accept logs created at or after since
       // Note: Omnidimension logs time_of_call in IST (+05:30)
       if (sinceMs > 0) {
         const rawTime = l.time_of_call || l.created_at || l.timestamp;
         if (rawTime) {
           const timeWithZone = (rawTime.endsWith('Z') || rawTime.includes('+')) ? rawTime : (rawTime + ' +05:30');
           const logMs = new Date(timeWithZone).getTime();
-          if (!isNaN(logMs) && logMs < (sinceMs - 10000)) {
+          if (!isNaN(logMs) && logMs < (sinceMs - 3000)) {
             return false; // Skip stale historical log!
           }
         }

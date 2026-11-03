@@ -548,7 +548,9 @@ const TelephonyUI = {
 
     const localCalls = (AppState.callLogs || []).map(c => {
       const durationSec = c.durationSec || 0;
+      const isCalling = c.status === 'dispatched' || c.status === 'calling';
       const isConnected = durationSec > 0 || c.status === 'completed' || c.statusLabel === 'सफल बात';
+      const isFailed = !isConnected && !isCalling;
       return {
         id: String(c.id || ('local_' + Math.random())),
         phone: c.callerNumber || c.phone || 'नंबर नहीं',
@@ -562,10 +564,11 @@ const TelephonyUI = {
         durationMin: 0,
         durationStr: durationSec > 0 ? `00:${String(durationSec).padStart(2, '0')}` : '00:00',
         isConnected,
-        isFailed: !isConnected,
-        failReason: isConnected ? '' : 'कॉल कनेक्ट नहीं हुई',
-        statusText: isConnected ? '✅ बात हुई' : '❌ कॉल नहीं लगी',
-        statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-rose-100 text-rose-900 border-rose-300',
+        isFailed,
+        isCalling,
+        failReason: isConnected ? '' : (isCalling ? '' : 'कॉल कनेक्ट नहीं हुई'),
+        statusText: isConnected ? '✅ बात हुई' : (isCalling ? '📞 कॉल जारी...' : '❌ कॉल नहीं लगी'),
+        statusClass: isConnected ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : (isCalling ? 'bg-indigo-100 text-indigo-900 border-indigo-300 animate-pulse' : 'bg-rose-100 text-rose-900 border-rose-300'),
         time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : 'आज',
         timestamp: c.timestamp || null,
         summary: c.responseText || 'तकादा संदेश भेजा गया',
@@ -2330,6 +2333,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   activeQueue: [],
   queueIndex: 0,
   activeSlots: [null, null], // Line 1 (slot 0) and Line 2 (slot 1)
+  workerRunning: [false, false],
   completedCount: 0,
   totalQueued: 0,
 
@@ -2449,7 +2453,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           prompt: c.prompt || defaultPrompt,
           due: c.due || c.dueAmount || 0,
           shopId: c.shopId || (isCampaign ? 'kirana' : AppState.currentShopId),
-          campaign: isCampaign ? 'inauguration' : (c.campaign || undefined)
+          campaign: isCampaign ? 'inauguration' : (c.campaign || undefined),
+          requeueCount: 0
         });
       }
     }
@@ -2471,6 +2476,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     this.completedCount = 0;
     this.totalQueued = validList.length;
     this.activeSlots = [null, null];
+    this.workerRunning = [false, false];
     this.isAutoDialing = true;
     this.isCampaignCalling = isCampaign;
     this.isAutoDialPaused = false;
@@ -2493,56 +2499,65 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   },
 
   async runCallWorker(slotIndex = 0) {
-    while (this.isAutoDialing || this.isCampaignCalling) {
-      if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
-      }
+    this.workerRunning[slotIndex] = true;
 
-      // Check if more contacts in queue
-      if (this.queueIndex >= this.activeQueue.length) {
+    try {
+      while (this.isAutoDialing || this.isCampaignCalling) {
+        if (this.isAutoDialPaused) {
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+
+        // Check if more contacts in queue
+        if (this.queueIndex >= this.activeQueue.length) {
+          this.activeSlots[slotIndex] = null;
+          this.workerRunning[slotIndex] = false;
+          this.updateCallingBanner();
+
+          // Check if both workers have finished
+          const otherSlot = slotIndex === 0 ? 1 : 0;
+          if (!this.workerRunning[otherSlot]) {
+            const total = this.totalQueued;
+            this.stopAutoDial();
+            AppState.showToast(`🎉 सभी ${total} नंबरों पर 2-लाइन AI कॉलिंग सफलतापूर्वक संपन्न हुई!`);
+            await this.fetchCampaignContacts();
+            await this.fetchLiveOmnidimLogs(true);
+          }
+          break;
+        }
+
+        // Atomically pick next contact from queue
+        const contact = this.activeQueue[this.queueIndex++];
+        const cleanPhone = contact.cleanPhone;
+
+        this.activeSlots[slotIndex] = {
+          slotNum: slotIndex + 1,
+          contact,
+          status: 'dispatching',
+          statusText: 'कॉल लगाई जा रही है...',
+          startTime: Date.now()
+        };
+        this.updateCallingBanner();
+
+        // Mark contact as 'calling' in campaign list / UI
+        this.markContactCalling(contact, cleanPhone);
+
+        // Execute call on this line
+        const result = await this.executeCallOnLine(slotIndex, contact, cleanPhone);
+        if (!result || !result.requeued) {
+          this.completedCount++;
+        }
+
         this.activeSlots[slotIndex] = null;
         this.updateCallingBanner();
 
-        // Check if both lines are finished
-        const otherSlot = slotIndex === 0 ? 1 : 0;
-        if (!this.activeSlots[otherSlot]) {
-          const total = this.totalQueued;
-          this.stopAutoDial();
-          AppState.showToast(`🎉 सभी ${total} नंबरों पर 2-लाइन AI कॉलिंग सफलतापूर्वक संपन्न हुई!`);
-          await this.fetchCampaignContacts();
-          await this.fetchLiveOmnidimLogs(true);
+        // Polite carrier buffer (2.5s) between consecutive calls on this slot
+        if (this.queueIndex < this.activeQueue.length && (this.isAutoDialing || this.isCampaignCalling)) {
+          await new Promise(r => setTimeout(r, 2500));
         }
-        break;
       }
-
-      // Atomically pick next contact from queue
-      const contact = this.activeQueue[this.queueIndex++];
-      const cleanPhone = contact.cleanPhone;
-
-      this.activeSlots[slotIndex] = {
-        slotNum: slotIndex + 1,
-        contact,
-        status: 'dispatching',
-        statusText: 'कॉल लगाई जा रही है...',
-        startTime: Date.now()
-      };
-      this.updateCallingBanner();
-
-      // Mark contact as 'calling' in campaign list / UI
-      this.markContactCalling(contact, cleanPhone);
-
-      // Execute call on this line
-      await this.executeCallOnLine(slotIndex, contact, cleanPhone);
-      this.completedCount++;
-
-      this.activeSlots[slotIndex] = null;
-      this.updateCallingBanner();
-
-      // Polite carrier buffer (2.5s) between consecutive calls on this slot
-      if (this.queueIndex < this.activeQueue.length && (this.isAutoDialing || this.isCampaignCalling)) {
-        await new Promise(r => setTimeout(r, 2500));
-      }
+    } finally {
+      this.workerRunning[slotIndex] = false;
     }
   },
 
@@ -2571,9 +2586,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    // Silent background dispatch retry (up to 3 attempts if telecom carrier trunk is temporarily busy)
-    // NOTE: UI text stays clean ("कॉल लगाई जा रही है..."), NEVER showing "पुनः प्रयास" or "लाइन व्यस्त"
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // Background dispatch retry with backoff
+    for (let attempt = 1; attempt <= 4; attempt++) {
       if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
       try {
         const res = await fetch('/api/omnidim/dispatch', {
@@ -2598,16 +2612,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           break;
         } else {
           dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
-          const isConcurrency = data?.isConcurrencyLimit || /concurrency|limit|busy|channel/i.test(dispatchErrorMsg);
-          if (isConcurrency && attempt < 3) {
-            // Wait silently 3 seconds without changing UI text
+          if (attempt < 4) {
+            // Wait silently without changing UI text
             await new Promise(r => setTimeout(r, 3000));
             continue;
           }
         }
       } catch (err) {
         dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
-        if (attempt < 3) {
+        if (attempt < 4) {
           await new Promise(r => setTimeout(r, 2500));
           continue;
         }
@@ -2621,6 +2634,17 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     let audioUrl = null;
 
     if (!dispatchSuccess) {
+      // ZERO-SKIP INVARIANT: If carrier trunk channel was temporarily unavailable,
+      // re-queue the number to the end of the queue so it is called when channel frees up!
+      if (!contact.requeueCount) contact.requeueCount = 0;
+      if (contact.requeueCount < 3) {
+        contact.requeueCount++;
+        this.activeQueue.push(contact);
+        this.totalQueued = this.activeQueue.length;
+        this.updateCallingBanner();
+        return { success: false, requeued: true };
+      }
+
       finalStatus = 'failed';
       summary = dispatchErrorMsg ? `कॉल नहीं लग सकी (${dispatchErrorMsg})` : 'कॉल प्रारंभ नहीं हो सकी';
       if (this.activeSlots[slotIndex]) {
@@ -2758,6 +2782,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     this.isAutoDialPaused = false;
     this.activeQueue = [];
     this.activeSlots = [null, null];
+    this.workerRunning = [false, false];
     this.updateCallingBanner();
   },
 
