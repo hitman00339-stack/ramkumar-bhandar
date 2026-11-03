@@ -2487,14 +2487,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     // Worker 0 starts immediately on Line 1
     this.runCallWorker(0);
 
-    // If there is more than 1 contact, start Worker 1 on Line 2 with a polite 3.5s initial stagger
-    // to allow telecom operator to cleanly allocate channel 1 before channel 2 is requested
+    // If there is more than 1 contact, start Worker 1 on Line 2 with a snappy 1000ms initial stagger
+    // so both lines become active concurrently right away without idle waiting
     if (validList.length > 1) {
       setTimeout(() => {
         if (this.isAutoDialing || this.isCampaignCalling) {
           this.runCallWorker(1);
         }
-      }, 3500);
+      }, 1000);
     }
   },
 
@@ -2548,12 +2548,16 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           this.completedCount++;
         }
 
-        this.activeSlots[slotIndex] = null;
-        this.updateCallingBanner();
-
-        // Polite carrier buffer (2.5s) between consecutive calls on this slot
+        // Fast zero-delay line handover: immediately prepare next contact so line never sits idle
         if (this.queueIndex < this.activeQueue.length && (this.isAutoDialing || this.isCampaignCalling)) {
-          await new Promise(r => setTimeout(r, 2500));
+          if (this.activeSlots[slotIndex]) {
+            this.activeSlots[slotIndex].statusText = '⚡ अगला नंबर...';
+            this.updateCallingBanner();
+          }
+          await new Promise(r => setTimeout(r, 200));
+        } else {
+          this.activeSlots[slotIndex] = null;
+          this.updateCallingBanner();
         }
       }
     } finally {
@@ -2613,15 +2617,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         } else {
           dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
           if (attempt < 4) {
-            // Wait silently without changing UI text
-            await new Promise(r => setTimeout(r, 3000));
+            // Fast silent retry without changing UI text
+            await new Promise(r => setTimeout(r, 600));
             continue;
           }
         }
       } catch (err) {
         dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
         if (attempt < 4) {
-          await new Promise(r => setTimeout(r, 2500));
+          await new Promise(r => setTimeout(r, 600));
           continue;
         }
       }
@@ -2682,12 +2686,12 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    const maxPollTimeMs = 70000;
+    const maxPollTimeMs = 40000;
     const startPoll = Date.now();
     let callEnded = false;
 
-    // Initial wait of 4s before first poll so call has time to reach carrier network
-    await new Promise(r => setTimeout(r, 4000));
+    // Fast initial wait of 1.2s so dispatch reaches telecom carrier
+    await new Promise(r => setTimeout(r, 1200));
 
     while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
       if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
@@ -2705,9 +2709,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         const statusRes = await fetch(`/api/omnidim/call-status/${cleanPhone}?${queryParams.toString()}`);
         if (statusRes.ok) {
           const statusData = await statusRes.json();
-          // Minimum 6-second in-flight guard: telecom call cannot realistically end in < 6 seconds
           const elapsedSec = (Date.now() - dispatchStartTime) / 1000;
-          if (statusData.ended && (elapsedSec >= 6 || (statusData.totalSec && statusData.totalSec > 0))) {
+          if (statusData.ended && (elapsedSec >= 2.5 || (statusData.totalSec && statusData.totalSec > 0))) {
             callEnded = true;
             finalStatus = statusData.status || 'failed';
             durationStr = statusData.durationStr || '00:00';
@@ -2720,12 +2723,12 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         console.warn(`Line ${slotIndex + 1} status polling error:`, e);
       }
 
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 1200));
     }
 
     if (!callEnded) {
       finalStatus = 'failed';
-      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
+      summary = 'घंटी बजी पर उत्तर नहीं मिला';
     }
 
     if (this.activeSlots[slotIndex]) {

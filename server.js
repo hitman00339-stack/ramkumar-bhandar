@@ -780,7 +780,23 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
 
 // Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches
 let lastDispatchTimestamp = 0;
-const MIN_DISPATCH_SPACING_MS = 2500;
+const MIN_DISPATCH_SPACING_MS = 600;
+
+// Fast micro-cache for Omnidimension calls/logs (1.2s TTL) so concurrent lines don't stall
+let fastLogsCache = null;
+let fastLogsCacheTime = 0;
+const FAST_LOGS_CACHE_TTL_MS = 1200;
+
+function parseOmnidimLogTimestamp(rawTime) {
+  if (!rawTime) return 0;
+  if (rawTime.endsWith('Z') || rawTime.includes('+')) return new Date(rawTime).getTime();
+  // Omnidimension outputs UTC timestamps e.g. "11/03/2026 09:45:04"
+  // Evaluate both UTC and IST, select whichever interpretation is closest to current time
+  const utcMs = new Date(rawTime + ' Z').getTime();
+  const istMs = new Date(rawTime + ' +05:30').getTime();
+  const now = Date.now();
+  return Math.abs(now - utcMs) < Math.abs(now - istMs) ? utcMs : istMs;
+}
 
 app.post('/api/omnidim/dispatch', async (req, res) => {
   try {
@@ -789,7 +805,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
       return res.status(400).json({ success: false, error: 'कॉल करने के लिए मोबाइल नंबर आवश्यक है' });
     }
 
-    // Ensure polite 2.5s spacing between calls to Omnidimension to avoid telecom carrier SIP race conditions
+    // Fast 600ms spacing between calls to avoid telecom carrier SIP race conditions
     const now = Date.now();
     const waitMs = Math.max(0, MIN_DISPATCH_SPACING_MS - (now - lastDispatchTimestamp));
     lastDispatchTimestamp = now + waitMs;
@@ -889,7 +905,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
 // ----------------------------------------------------
 // 5.0.0.1 ULTRA-FAST REAL-TIME CALL STATUS CHECK
-// Used by sequential campaign & batch dialers to detect call end within 2-3s
+// Used by sequential campaign & batch dialers to detect call end within 1-2s
 // ----------------------------------------------------
 app.get('/api/omnidim/call-status/:phone', async (req, res) => {
   try {
@@ -899,32 +915,39 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       return res.status(400).json({ success: false, error: 'अमान्य मोबाइल नंबर' });
     }
 
-    // Fetch latest 15 logs directly from Omnidimension
+    // Fetch latest 30 logs from Omnidimension with fast 1.2s micro-cache to eliminate roundtrip lag
     let latestLogs = [];
-    try {
-      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=15`, {
-        headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        latestLogs = data.call_log_data || [];
-        if (latestLogs.length > 0) {
-          db.recordCallHistoryFromLogs(latestLogs, { autoHarvestInbound: true });
+    const now = Date.now();
+    if (fastLogsCache && (now - fastLogsCacheTime) < FAST_LOGS_CACHE_TTL_MS) {
+      latestLogs = fastLogsCache;
+    } else {
+      try {
+        const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=30`, {
+          headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          latestLogs = data.call_log_data || [];
+          if (latestLogs.length > 0) {
+            fastLogsCache = latestLogs;
+            fastLogsCacheTime = Date.now();
+            db.recordCallHistoryFromLogs(latestLogs, { autoHarvestInbound: true });
+          }
         }
+      } catch (e) {
+        console.warn('Fast call-status fetch error:', e.message);
       }
-    } catch (e) {
-      console.warn('Fast call-status fetch error:', e.message);
     }
 
     const allLogs = latestLogs.length > 0 ? latestLogs : (db.data.omnidimLogsCache || []);
     
-    // Find matching fresh log for this phone number (rejects stale logs from earlier calls)
+    // Find matching fresh log for this phone number
     const sinceMs = req.query.since ? parseInt(req.query.since, 10) : 0;
     const targetCallId = req.query.callId;
 
     const matchingLog = allLogs.find(l => {
+      // 1. Primary match: specific call by id or Omnidimension call_request_id.id
       if (targetCallId) {
-        // Match specific call by id or Omnidimension call_request_id.id
         const matchesId = (
           String(l.id) === String(targetCallId) ||
           String(l.call_id) === String(targetCallId) ||
@@ -932,22 +955,21 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
           String(l.request_id) === String(targetCallId) ||
           String(l.call_request_id?.id) === String(targetCallId)
         );
-        // If targetCallId is specified, ONLY match by targetCallId! Never fall back to older calls to same phone
-        return matchesId;
+        if (matchesId) return true;
       }
+
+      // 2. Secondary fallback match: clean 10-digit phone number dispatched on or after sinceMs
       const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
       const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
       if (toClean !== clean && fromClean !== clean) return false;
 
-      // If since timestamp provided, only accept logs created at or after since
-      // Note: Omnidimension logs time_of_call in IST (+05:30)
       if (sinceMs > 0) {
         const rawTime = l.time_of_call || l.created_at || l.timestamp;
         if (rawTime) {
-          const timeWithZone = (rawTime.endsWith('Z') || rawTime.includes('+')) ? rawTime : (rawTime + ' +05:30');
-          const logMs = new Date(timeWithZone).getTime();
-          if (!isNaN(logMs) && logMs < (sinceMs - 3000)) {
-            return false; // Skip stale historical log!
+          const logMs = parseOmnidimLogTimestamp(rawTime);
+          // Allow 10s leeway for clock variations
+          if (!isNaN(logMs) && logMs < (sinceMs - 10000)) {
+            return false; // Skip genuinely old historical calls from earlier hours/days
           }
         }
       }

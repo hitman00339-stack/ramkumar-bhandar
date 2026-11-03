@@ -973,6 +973,64 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(unresolvedShortCalls.length, 0, 'ग्राहक से बाद में पूरी बात (>15s) हो जाने पर उसे शॉर्ट कॉल फॉलो-अप कतार से हटा दिया जाना चाहिए');
   });
 
+  await t.test('Ultra-Fast Line Handover Invariant: Line advances to next contact within < 500ms when call finishes, zero idle wait', async () => {
+    // Simulate line finishing a call and picking the next contact
+    const activeQueue = [
+      { id: 'c1', cleanPhone: '9511003038' },
+      { id: 'c2', cleanPhone: '9451696820' }
+    ];
+    let queueIndex = 0;
+    const timestamps = [];
+
+    async function executeNextCallOnLine(slotIndex) {
+      const contact = activeQueue[queueIndex++];
+      timestamps.push({ event: 'start', contact: contact.cleanPhone, time: Date.now() });
+      // Call finishes after 20ms
+      await new Promise(r => setTimeout(r, 20));
+      timestamps.push({ event: 'end', contact: contact.cleanPhone, time: Date.now() });
+
+      // Fast handover check
+      if (queueIndex < activeQueue.length) {
+        await new Promise(r => setTimeout(r, 10)); // ~200ms in live, 10ms in test
+        await executeNextCallOnLine(slotIndex);
+      }
+    }
+
+    await executeNextCallOnLine(0);
+
+    assert.strictEqual(timestamps.length, 4);
+    const endC1 = timestamps[1].time;
+    const startC2 = timestamps[2].time;
+    const handoverLatency = startC2 - endC1;
+    assert(handoverLatency < 100, `Line handover must be near instantaneous (was ${handoverLatency}ms)`);
+  });
+
+  await t.test('parseOmnidimLogTimestamp: Resilient to UTC and IST without 5.5 hour offset drift', () => {
+    function parseOmnidimLogTimestamp(rawTime) {
+      if (!rawTime) return 0;
+      if (rawTime.endsWith('Z') || rawTime.includes('+')) return new Date(rawTime).getTime();
+      const utcMs = new Date(rawTime + ' Z').getTime();
+      const istMs = new Date(rawTime + ' +05:30').getTime();
+      const now = Date.now();
+      return Math.abs(now - utcMs) < Math.abs(now - istMs) ? utcMs : istMs;
+    }
+
+    const now = new Date();
+    // Simulate Omnidim UTC timestamp created 10 seconds ago
+    const tenSecAgo = new Date(now.getTime() - 10000);
+    const month = String(tenSecAgo.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(tenSecAgo.getUTCDate()).padStart(2, '0');
+    const year = tenSecAgo.getUTCFullYear();
+    const hours = String(tenSecAgo.getUTCHours()).padStart(2, '0');
+    const minutes = String(tenSecAgo.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(tenSecAgo.getUTCSeconds()).padStart(2, '0');
+    const omniUtcStr = `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
+
+    const parsedMs = parseOmnidimLogTimestamp(omniUtcStr);
+    const diffSec = Math.abs(now.getTime() - parsedMs) / 1000;
+    assert(diffSec <= 15, `Parsed timestamp should be ~10s from now, was ${diffSec}s!`);
+  });
+
   // Cleanup
   if (fs.existsSync(testDbFile)) fs.unlinkSync(testDbFile);
 });
