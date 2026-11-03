@@ -2318,18 +2318,18 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
   // ----------------------------------------------------
   // ----------------------------------------------------
-  // SEQUENTIAL AI CALLING ENGINE (STRICT SINGLE-LINE CONCURRENCY = 1)
-  // Exactly ONE call at a time from +918045440103
-  // Waits until each call is answered/completed before dialing the next
-  // Zero "पुनः प्रयास" spam, zero SIP trunk conflicts, zero skipped numbers
+  // 2-LINE CONCURRENT AI CALLING ENGINE (CONCURRENCY = 2)
+  // Places up to 2 calls at the same time from +918045440103 to 2 different persons
+  // Dedicated Line 1 (slot 0) and Line 2 (slot 1) side-by-side
+  // Zero "पुनः प्रयास" text, zero SIP carrier collisions, zero skipped numbers
   // ----------------------------------------------------
-  CONCURRENCY_LIMIT: 1,
+  CONCURRENCY_LIMIT: 2,
   isAutoDialing: false,
   isCampaignCalling: false,
   isAutoDialPaused: false,
   activeQueue: [],
   queueIndex: 0,
-  activeSlots: [null], // Exactly 1 active call line
+  activeSlots: [null, null], // Line 1 (slot 0) and Line 2 (slot 1)
   completedCount: 0,
   totalQueued: 0,
 
@@ -2354,46 +2354,75 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const modeTitle = isCamp ? '🎈 उद्घाटन आमंत्रण' : '📢 AI कॉलिंग';
 
     if (progressEl) {
-      progressEl.innerText = `🚀 ${modeTitle} • प्रगति: ${this.completedCount}/${this.totalQueued}`;
+      progressEl.innerText = `🚀 ${modeTitle} • 2-लाइन्स सक्रिय (प्रगति: ${this.completedCount}/${this.totalQueued})`;
     }
     if (statusBadge) {
       if (this.isAutoDialPaused) {
         statusBadge.innerText = '⏸️ रुकी हुई है';
         statusBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-600';
       } else {
-        statusBadge.innerText = '1 कॉल सक्रिय';
-        statusBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700';
+        statusBadge.innerText = '2 लाइन्स सक्रिय';
+        statusBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-900 text-indigo-200 border border-indigo-700 hidden sm:inline';
       }
     }
     if (pauseBtn) {
       pauseBtn.innerText = this.isAutoDialPaused ? '▶️ पुनः शुरू' : '⏸️ रोकें';
     }
 
-    // Update Slot 1 (Active Single Call) UI
+    // Update Line 1 (Slot 0)
     const slot1 = this.activeSlots[0];
     const s1Name = document.getElementById('banner-slot-1-name');
     const s1Phone = document.getElementById('banner-slot-1-phone');
     const s1Status = document.getElementById('banner-slot-1-status');
 
     if (slot1) {
-      if (s1Name) s1Name.innerText = `सक्रिय कॉल: ${slot1.contact.name}`;
+      if (s1Name) s1Name.innerText = `लाइन 1: ${slot1.contact.name}`;
       if (s1Phone) s1Phone.innerText = slot1.contact.phone || ('+91 ' + slot1.contact.cleanPhone);
       if (s1Status) {
-        s1Status.innerText = slot1.statusText || 'कॉल जारी...';
-        s1Status.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700 animate-pulse';
+        s1Status.innerText = slot1.statusText || 'कॉल लगाई जा रही है...';
+        s1Status.className = slot1.status === 'connected'
+          ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700 shrink-0'
+          : (slot1.status === 'failed'
+            ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700 shrink-0'
+            : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-900 text-indigo-200 border border-indigo-700 animate-pulse shrink-0');
       }
     } else {
-      if (s1Name) s1Name.innerText = 'कॉल: प्रतीक्षा में...';
+      if (s1Name) s1Name.innerText = 'लाइन 1: प्रतीक्षा में...';
       if (s1Phone) s1Phone.innerText = '--';
       if (s1Status) {
-        s1Status.innerText = this.queueIndex >= this.totalQueued ? 'पूर्ण' : 'खाली (Idle)';
-        s1Status.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700';
+        s1Status.innerText = this.queueIndex >= this.totalQueued ? 'पूर्ण' : 'खाली';
+        s1Status.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shrink-0';
       }
     }
 
-    // Cleanly hide Line 2 to avoid clutter
+    // Update Line 2 (Slot 1)
     const slot2Box = document.getElementById('banner-slot-2');
-    if (slot2Box) slot2Box.classList.add('hidden');
+    if (slot2Box) slot2Box.classList.remove('hidden');
+
+    const slot2 = this.activeSlots[1];
+    const s2Name = document.getElementById('banner-slot-2-name');
+    const s2Phone = document.getElementById('banner-slot-2-phone');
+    const s2Status = document.getElementById('banner-slot-2-status');
+
+    if (slot2) {
+      if (s2Name) s2Name.innerText = `लाइन 2: ${slot2.contact.name}`;
+      if (s2Phone) s2Phone.innerText = slot2.contact.phone || ('+91 ' + slot2.contact.cleanPhone);
+      if (s2Status) {
+        s2Status.innerText = slot2.statusText || 'कॉल लगाई जा रही है...';
+        s2Status.className = slot2.status === 'connected'
+          ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700 shrink-0'
+          : (slot2.status === 'failed'
+            ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-900 text-rose-200 border border-rose-700 shrink-0'
+            : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700 animate-pulse shrink-0');
+      }
+    } else {
+      if (s2Name) s2Name.innerText = 'लाइन 2: प्रतीक्षा में...';
+      if (s2Phone) s2Phone.innerText = '--';
+      if (s2Status) {
+        s2Status.innerText = this.queueIndex >= this.totalQueued ? 'पूर्ण' : 'खाली';
+        s2Status.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shrink-0';
+      }
+    }
   },
 
   startConcurrentDialing(contactsList, isCampaign = false, promptText = null) {
@@ -2441,16 +2470,26 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     this.queueIndex = 0;
     this.completedCount = 0;
     this.totalQueued = validList.length;
-    this.activeSlots = [null];
+    this.activeSlots = [null, null];
     this.isAutoDialing = true;
     this.isCampaignCalling = isCampaign;
     this.isAutoDialPaused = false;
 
     this.updateCallingBanner();
-    AppState.showToast(`🚀 AI कॉलिंग प्रारंभ: कुल ${validList.length} नंबर (एक समय पर 1 कॉल सुरक्षित रूप से)`);
+    AppState.showToast(`🚀 2-लाइन AI कॉलिंग प्रारंभ: कुल ${validList.length} नंबर (एक समय पर 2 कॉल साथ-साथ)`);
 
-    // Launch single worker: exactly 1 call at a time, strictly sequential
+    // Worker 0 starts immediately on Line 1
     this.runCallWorker(0);
+
+    // If there is more than 1 contact, start Worker 1 on Line 2 with a polite 3.5s initial stagger
+    // to allow telecom operator to cleanly allocate channel 1 before channel 2 is requested
+    if (validList.length > 1) {
+      setTimeout(() => {
+        if (this.isAutoDialing || this.isCampaignCalling) {
+          this.runCallWorker(1);
+        }
+      }, 3500);
+    }
   },
 
   async runCallWorker(slotIndex = 0) {
@@ -2465,11 +2504,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         this.activeSlots[slotIndex] = null;
         this.updateCallingBanner();
 
-        const total = this.totalQueued;
-        this.stopAutoDial();
-        AppState.showToast(`🎉 सभी ${total} नंबरों पर AI कॉलिंग सफलतापूर्वक संपन्न हुई!`);
-        await this.fetchCampaignContacts();
-        await this.fetchLiveOmnidimLogs(true);
+        // Check if both lines are finished
+        const otherSlot = slotIndex === 0 ? 1 : 0;
+        if (!this.activeSlots[otherSlot]) {
+          const total = this.totalQueued;
+          this.stopAutoDial();
+          AppState.showToast(`🎉 सभी ${total} नंबरों पर 2-लाइन AI कॉलिंग सफलतापूर्वक संपन्न हुई!`);
+          await this.fetchCampaignContacts();
+          await this.fetchLiveOmnidimLogs(true);
+        }
         break;
       }
 
@@ -2478,7 +2521,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       const cleanPhone = contact.cleanPhone;
 
       this.activeSlots[slotIndex] = {
-        slotNum: 1,
+        slotNum: slotIndex + 1,
         contact,
         status: 'dispatching',
         statusText: 'कॉल लगाई जा रही है...',
@@ -2489,16 +2532,16 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       // Mark contact as 'calling' in campaign list / UI
       this.markContactCalling(contact, cleanPhone);
 
-      // Execute single call with live status tracking - WAITS until finished whether answered or not!
+      // Execute call on this line
       await this.executeCallOnLine(slotIndex, contact, cleanPhone);
       this.completedCount++;
 
       this.activeSlots[slotIndex] = null;
       this.updateCallingBanner();
 
-      // Polite carrier buffer (3.5s) between calls to allow telecom operator to completely clear SIP session
+      // Polite carrier buffer (2.5s) between consecutive calls on this slot
       if (this.queueIndex < this.activeQueue.length && (this.isAutoDialing || this.isCampaignCalling)) {
-        await new Promise(r => setTimeout(r, 3500));
+        await new Promise(r => setTimeout(r, 2500));
       }
     }
   },
@@ -2528,31 +2571,48 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    try {
-      const res = await fetch('/api/omnidim/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: 276578,
-          toNumber: '+91' + cleanPhone,
-          prompt: contact.prompt,
-          context: {
-            customerName: contact.name,
-            campaign: contact.campaign || 'inauguration',
-            amount: contact.due || 0,
-            shopName: contact.shopId === 'kirana' ? 'रामकुमार किराना एवं जनरल स्टोर' : 'रामकुमार खाद भंडार'
+    // Silent background dispatch retry (up to 3 attempts if telecom carrier trunk is temporarily busy)
+    // NOTE: UI text stays clean ("कॉल लगाई जा रही है..."), NEVER showing "पुनः प्रयास" or "लाइन व्यस्त"
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
+      try {
+        const res = await fetch('/api/omnidim/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 276578,
+            toNumber: '+91' + cleanPhone,
+            prompt: contact.prompt,
+            context: {
+              customerName: contact.name,
+              campaign: contact.campaign || 'inauguration',
+              amount: contact.due || 0,
+              shopName: contact.shopId === 'kirana' ? 'रामकुमार किराना एवं जनरल स्टोर' : 'रामकुमार खाद भंडार'
+            }
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          dispatchSuccess = true;
+          omniCallId = data.callId || null;
+          break;
+        } else {
+          dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
+          const isConcurrency = data?.isConcurrencyLimit || /concurrency|limit|busy|channel/i.test(dispatchErrorMsg);
+          if (isConcurrency && attempt < 3) {
+            // Wait silently 3 seconds without changing UI text
+            await new Promise(r => setTimeout(r, 3000));
+            continue;
           }
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        dispatchSuccess = true;
-        omniCallId = data.callId || null;
-      } else {
-        dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
+        }
+      } catch (err) {
+        dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, 2500));
+          continue;
+        }
       }
-    } catch (err) {
-      dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
+      break;
     }
 
     let finalStatus = 'failed';
@@ -2633,90 +2693,6 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           }
         }
       } catch (e) {
-        console.warn(`Line status polling error:`, e);
-      }
-
-      await new Promise(r => setTimeout(r, 2500));
-    }
-
-    if (!callEnded) {
-      finalStatus = 'failed';
-      summary = 'कॉल समय-सीमा समाप्त (Timeout)';
-    }
-
-    if (this.activeSlots[slotIndex]) {
-      this.activeSlots[slotIndex].status = finalStatus;
-      this.activeSlots[slotIndex].statusText = finalStatus === 'connected' ? `✅ बात हुई (${durationStr})` : '❌ कॉल नहीं उठी';
-      this.updateCallingBanner();
-    }
-
-    // Persist final call outcome
-    try {
-      await fetch('/api/campaign/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cleanPhone,
-          status: finalStatus,
-          durationStr,
-          summary,
-          audioUrl
-        })
-      });
-    } catch (e) {}
-
-    const campMatch = (this.campaignContacts || []).find(c => c.cleanPhone === cleanPhone || c.id === contact.id);
-    if (campMatch) {
-      campMatch.status = finalStatus;
-      campMatch.durationStr = durationStr;
-      campMatch.summary = summary;
-      campMatch.audioUrl = audioUrl;
-      campMatch.lastCallAt = new Date().toISOString();
-    }
-
-    this.renderCurrentTab();
-    return { success: true, finalStatus, durationStr, summary, audioUrl };
-  },
-      this.activeSlots[slotIndex].status = 'ringing';
-      this.activeSlots[slotIndex].statusText = '🔔 घंटी बज रही है / बात जारी...';
-      this.updateCallingBanner();
-    }
-
-    const maxPollTimeMs = 65000;
-    const startPoll = Date.now();
-    let callEnded = false;
-
-    // Initial wait of 4s before first poll so call has time to reach carrier network
-    await new Promise(r => setTimeout(r, 4000));
-
-    while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
-      if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
-      if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
-      }
-
-      try {
-        const queryParams = new URLSearchParams({
-          since: String(dispatchStartTime - 3000)
-        });
-        if (omniCallId) queryParams.set('callId', String(omniCallId));
-
-        const statusRes = await fetch(`/api/omnidim/call-status/${cleanPhone}?${queryParams.toString()}`);
-        if (statusRes.ok) {
-          const statusData = await statusRes.json();
-          // Minimum 6-second in-flight guard: telecom call cannot realistically end in < 6 seconds
-          const elapsedSec = (Date.now() - dispatchStartTime) / 1000;
-          if (statusData.ended && (elapsedSec >= 6 || (statusData.totalSec && statusData.totalSec > 0))) {
-            callEnded = true;
-            finalStatus = statusData.status || 'failed';
-            durationStr = statusData.durationStr || '00:00';
-            summary = statusData.summary || '';
-            audioUrl = statusData.audioUrl || null;
-            break;
-          }
-        }
-      } catch (e) {
         console.warn(`Line ${slotIndex + 1} status polling error:`, e);
       }
 
@@ -2759,6 +2735,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }
 
     this.renderCurrentTab();
+    return { success: true, finalStatus, durationStr, summary, audioUrl };
   },
 
   startBatchAutoDial(customerList, shopId = null) {
