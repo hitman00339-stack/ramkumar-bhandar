@@ -223,7 +223,7 @@
     </div>
   </header>
 
-  <!-- FLOATING PERSISTENT 2-LINE CONCURRENT AI CALLING BANNER -->
+  <!-- FLOATING PERSISTENT AI CALLING BANNER -->
   <div id="active-calling-banner" class="hidden fixed top-16 left-0 right-0 z-40 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-950 text-white px-3 sm:px-4 py-2.5 shadow-2xl border-b-2 border-indigo-500 backdrop-blur-md flex flex-col gap-2">
     <!-- Top Header Strip: Overall Progress & Controls -->
     <div class="flex items-center justify-between gap-2 border-b border-indigo-900/60 pb-1.5">
@@ -234,10 +234,10 @@
         </div>
         <div class="flex items-center gap-2 truncate">
           <span class="font-extrabold text-xs sm:text-sm text-emerald-300 tracking-tight" id="calling-banner-progress">
-            🚀 2-लाइन्स AI कॉलिंग सक्रिय (Concurrency = 2)
+            🚀 AI कॉलिंग सक्रिय
           </span>
           <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-900 text-indigo-200 border border-indigo-700 hidden sm:inline" id="calling-banner-status">
-            2 कॉल्स एक साथ
+            1 कॉल सक्रिय
           </span>
         </div>
       </div>
@@ -251,35 +251,23 @@
       </div>
     </div>
 
-    <!-- Active Parallel Lines Grid (Line 1 & Line 2 side-by-side) -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2" id="calling-banner-lines-grid">
-      <!-- Line 1 Card -->
-      <div class="flex items-center justify-between p-2 rounded-xl bg-slate-900/80 border border-indigo-800/60 gap-2 min-w-0" id="banner-slot-1">
-        <div class="flex items-center gap-2 min-w-0">
-          <span class="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">L1</span>
+    <!-- Active Call Card (Single Focused Active Call) -->
+    <div class="w-full" id="calling-banner-lines-grid">
+      <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/80 border border-indigo-800/60 gap-2 min-w-0" id="banner-slot-1">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <span class="w-7 h-7 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center shrink-0">
+            <span class="material-symbols-outlined text-[15px]">call</span>
+          </span>
           <div class="min-w-0">
-            <span class="font-bold text-[11px] text-white truncate block" id="banner-slot-1-name">लाइन 1: प्रतीक्षा में...</span>
-            <span class="text-[10px] text-slate-400 font-mono" id="banner-slot-1-phone">--</span>
+            <span class="font-bold text-xs text-white truncate block" id="banner-slot-1-name">सक्रिय कॉल: प्रतीक्षा में...</span>
+            <span class="text-[11px] text-slate-400 font-mono" id="banner-slot-1-phone">--</span>
           </div>
         </div>
-        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 shrink-0" id="banner-slot-1-status">
+        <span class="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 shrink-0 font-medium" id="banner-slot-1-status">
           खाली
         </span>
       </div>
-
-      <!-- Line 2 Card -->
-      <div class="flex items-center justify-between p-2 rounded-xl bg-slate-900/80 border border-indigo-800/60 gap-2 min-w-0" id="banner-slot-2">
-        <div class="flex items-center gap-2 min-w-0">
-          <span class="w-5 h-5 rounded-full bg-emerald-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">L2</span>
-          <div class="min-w-0">
-            <span class="font-bold text-[11px] text-white truncate block" id="banner-slot-2-name">लाइन 2: प्रतीक्षा में...</span>
-            <span class="text-[10px] text-slate-400 font-mono" id="banner-slot-2-phone">--</span>
-          </div>
-        </div>
-        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 shrink-0" id="banner-slot-2-status">
-          खाली
-        </span>
-      </div>
+      <div class="hidden" id="banner-slot-2"></div>
     </div>
   </div>
 
@@ -2197,13 +2185,13 @@
     </div>
   </div>
 
-  <!-- APPLICATION SCRIPTS (Versioned ?v=20 for instant live cache busting) -->
-  <script src="/js/state.js?v=20"></script>
-  <script src="/js/khatabook.js?v=20"></script>
-  <script src="/js/inventory.js?v=20"></script>
-  <script src="/js/voice.js?v=20"></script>
-  <script src="/js/telephony.js?v=20"></script>
-  <script src="/js/sprayer.js?v=20"></script>
-  <script src="/js/app.js?v=20"></script>
+  <!-- APPLICATION SCRIPTS (Versioned ?v=21 for instant live cache busting) -->
+  <script src="/js/state.js?v=21"></script>
+  <script src="/js/khatabook.js?v=21"></script>
+  <script src="/js/inventory.js?v=21"></script>
+  <script src="/js/voice.js?v=21"></script>
+  <script src="/js/telephony.js?v=21"></script>
+  <script src="/js/sprayer.js?v=21"></script>
+  <script src="/js/app.js?v=21"></script>
 </body>
 </html>

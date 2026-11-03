@@ -468,7 +468,7 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual((suffixEnd - suffixStart) + 1, 200);
   });
 
-  await t.test('Concurrent Calling Invariant (Concurrency = 2): Exactly up to 2 active calls placed simultaneously from +918045440103 to different persons, pool replenishes as calls complete', () => {
+  await t.test('Strict Single-Line Invariant (Concurrency = 1): Never places more than 1 call at a time whether received or not, advances strictly after completion, zero "पुनः प्रयास" retry loops', () => {
     const queue = [
       { id: '1', phone: '9208321477', name: 'राकेश' },
       { id: '2', phone: '9336317193', name: 'सुभाष' },
@@ -478,60 +478,55 @@ test('AI Telephony Agent Integration Tests', async (t) => {
 
     const activeCalls = new Set();
     let maxSimultaneousCalls = 0;
-    const callLogEvents = [];
+    const completedCalls = [];
 
     function dispatchCall(contact) {
-      if (activeCalls.size >= 2) {
-        throw new Error('VIOLATION: Exceeded concurrency limit of 2 calls!');
+      if (activeCalls.size >= 1) {
+        throw new Error('VIOLATION: Exceeded concurrency limit of 1 call! Never place more than one call at a time');
       }
       activeCalls.add(contact.phone);
       maxSimultaneousCalls = Math.max(maxSimultaneousCalls, activeCalls.size);
-      callLogEvents.push({ type: 'start', phone: contact.phone, activeCount: activeCalls.size });
     }
 
-    function finishCall(contact) {
+    function finishCall(contact, outcome = 'completed') {
       assert(activeCalls.has(contact.phone), 'Cannot finish call that is not active');
       activeCalls.delete(contact.phone);
-      callLogEvents.push({ type: 'finish', phone: contact.phone, activeCount: activeCalls.size });
+      completedCalls.push({ phone: contact.phone, outcome });
     }
 
-    // Line 1 takes Contact 1
+    // Call 1 dispatches
     dispatchCall(queue[0]);
     assert.strictEqual(activeCalls.size, 1);
+    assert.strictEqual(maxSimultaneousCalls, 1);
 
-    // Line 2 takes Contact 2 simultaneously
-    dispatchCall(queue[1]);
-    assert.strictEqual(activeCalls.size, 2);
-    assert.strictEqual(maxSimultaneousCalls, 2);
+    // Attempting to dispatch a 2nd call while Call 1 is in-progress (whether received or not) must throw violation
+    assert.throws(() => dispatchCall(queue[1]), /Never place more than one call at a time/);
 
-    // Attempting to dispatch a 3rd call while 2 are active must throw violation
-    assert.throws(() => dispatchCall(queue[2]), /Exceeded concurrency limit of 2 calls/);
-
-    // Call 1 completes (Line 1 frees up)
-    finishCall(queue[0]);
-    assert.strictEqual(activeCalls.size, 1);
-
-    // Line 1 immediately picks up Contact 3
-    dispatchCall(queue[2]);
-    assert.strictEqual(activeCalls.size, 2);
-
-    // Call 2 completes (Line 2 frees up)
-    finishCall(queue[1]);
-    assert.strictEqual(activeCalls.size, 1);
-
-    // Line 2 immediately picks up Contact 4
-    dispatchCall(queue[3]);
-    assert.strictEqual(activeCalls.size, 2);
-
-    // Both finish
-    finishCall(queue[2]);
-    finishCall(queue[3]);
+    // Call 1 finishes (whether received or not)
+    finishCall(queue[0], 'completed');
     assert.strictEqual(activeCalls.size, 0);
 
-    // Verify all 4 were called without skipping
-    assert.strictEqual(callLogEvents.filter(e => e.type === 'start').length, 4);
-    assert.strictEqual(callLogEvents.filter(e => e.type === 'finish').length, 4);
-    assert.strictEqual(maxSimultaneousCalls, 2);
+    // ONLY now Call 2 can be dispatched
+    dispatchCall(queue[1]);
+    assert.strictEqual(activeCalls.size, 1);
+    assert.strictEqual(maxSimultaneousCalls, 1, 'Max simultaneous calls must never exceed 1');
+
+    // Call 2 finishes (e.g. no-answer)
+    finishCall(queue[1], 'no-answer');
+    assert.strictEqual(activeCalls.size, 0);
+
+    // Call 3 dispatches
+    dispatchCall(queue[2]);
+    assert.strictEqual(activeCalls.size, 1);
+    finishCall(queue[2], 'completed');
+
+    // Call 4 dispatches
+    dispatchCall(queue[3]);
+    assert.strictEqual(activeCalls.size, 1);
+    finishCall(queue[3], 'completed');
+
+    assert.strictEqual(completedCalls.length, 4, 'All 4 contacts processed sequentially without skips');
+    assert.strictEqual(maxSimultaneousCalls, 1, 'Never exceeded 1 call at a time');
   });
 
   await t.test('Bulk Campaign Number Parser: Extracts all Indian numbers without skipping (spaces, dashes, commas, mixed names)', () => {
@@ -817,41 +812,27 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert.strictEqual(isStale, true, 'पुरानी कॉल को नई कॉल समझकर तुरंत 2.5 सेकंड में बंद नहीं माना जाना चाहिए');
   });
 
-  await t.test('Zero-Skip Concurrency Invariant: When carrier is busy, contacts retry and re-queue so 0 numbers are skipped', async () => {
+  await t.test('Sequential Zero-Skip Invariant: Every contact in queue is called sequentially without any number being skipped or "पुनः प्रयास" spam', async () => {
     const queue = [
       { id: 'c1', name: 'राम', cleanPhone: '9511003038' },
       { id: 'c2', name: 'श्याम', cleanPhone: '9451696820' },
       { id: 'c3', name: 'मोहन', cleanPhone: '9876543210' }
     ];
 
+    let activeCount = 0;
     let completed = [];
-    let requeued = [];
-    let carrierConcurrencyActive = 2; // Carrier currently full
 
-    async function attemptCall(contact) {
-      if (carrierConcurrencyActive >= 2) {
-        // Concurrency limit reached
-        return { success: false, isConcurrencyLimit: true, needsRequeue: true };
-      }
-      carrierConcurrencyActive++;
-      return { success: true, needsRequeue: false };
+    async function executeSingleCall(contact) {
+      assert.strictEqual(activeCount, 0, 'No more than 1 call at a time allowed');
+      activeCount++;
+      // Simulate call in flight (whether received or not)
+      activeCount--;
+      completed.push(contact.cleanPhone);
+      return { success: true };
     }
 
-    // Process queue with zero-skip requeue guarantee
-    let qIdx = 0;
-    while (qIdx < queue.length) {
-      const contact = queue[qIdx++];
-      const res = await attemptCall(contact);
-      if (res.needsRequeue && !contact.requeued) {
-        contact.requeued = true;
-        requeued.push(contact.cleanPhone);
-        // Free carrier channel
-        carrierConcurrencyActive = 1;
-        queue.push(contact); // Re-queue to the end!
-      } else {
-        completed.push(contact.cleanPhone);
-        carrierConcurrencyActive = Math.max(0, carrierConcurrencyActive - 1);
-      }
+    for (const c of queue) {
+      await executeSingleCall(c);
     }
 
     // Verify all 3 original contacts completed without any being skipped!
@@ -859,7 +840,6 @@ test('AI Telephony Agent Integration Tests', async (t) => {
     assert(completed.includes('9511003038'));
     assert(completed.includes('9451696820'));
     assert(completed.includes('9876543210'));
-    assert(requeued.includes('9511003038'), 'अस्थायी व्यस्त नंबर को स्किप करने के बजाय कतार में पुनः जोड़ा जाना चाहिए');
   });
 
   await t.test('Short Conversation Filtering (< 15 Seconds): Correctly isolates calls under 15s across all filters', async () => {
