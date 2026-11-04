@@ -2,7 +2,63 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 const { Database, toRupees, formatHindiCurrency } = require('./database');
+
+// Force IPv4 agents to avoid Windows IPv6 NAT64 connection timeouts on mobile hotspots/ISPs
+const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true, timeout: 20000 });
+const ipv4HttpAgent = new http.Agent({ family: 4, keepAlive: true, timeout: 20000 });
+
+async function omnidimFetch(url, options = {}) {
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === 'https:';
+  const transport = isHttps ? https : http;
+  const agent = isHttps ? ipv4HttpsAgent : ipv4HttpAgent;
+
+  return new Promise((resolve, reject) => {
+    const reqOptions = {
+      method: options.method || 'GET',
+      agent,
+      headers: options.headers || {},
+      family: 4,
+      timeout: options.timeout || 20000
+    };
+
+    const req = transport.request(url, reqOptions, (res) => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          statusText: res.statusMessage,
+          headers: res.headers,
+          text: async () => buffer.toString('utf8'),
+          json: async () => {
+            const raw = buffer.toString('utf8');
+            try { return JSON.parse(raw); } catch (e) { return { error: raw }; }
+          },
+          arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`Omnidimension request timed out (${reqOptions.timeout}ms)`));
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    if (options.body) {
+      req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+    }
+    req.end();
+  });
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -452,7 +508,7 @@ app.post('/api/ai-phone/call-customer', async (req, res) => {
     let omniDispatched = false;
     let omniCallId = null;
     try {
-      const omniRes = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
+      const omniRes = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
@@ -689,7 +745,7 @@ const OMNIDIM_BASE_URL = 'https://backend.omnidim.io/api/v1';
 
 app.get('/api/omnidim/agents', async (req, res) => {
   try {
-    const response = await fetch(`${OMNIDIM_BASE_URL}/agents`, {
+    const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/agents`, {
       headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
     });
     const data = await response.json();
@@ -719,7 +775,7 @@ async function syncAllOmnidimLogs() {
     let hasMore = true;
 
     while (hasMore && pageno <= 10) {
-      const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=${pageno}&pagesize=100`, {
+      const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=${pageno}&pagesize=100`, {
         headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
       });
       if (!response.ok) break;
@@ -835,7 +891,7 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
     // Auto-retry on carrier trunk / concurrency limit with snappy delay for channel release
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const response = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
+        const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${OMNIDIM_API_KEY}`,
@@ -941,7 +997,7 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       latestLogs = fastLogsCache;
     } else {
       try {
-        const response = await fetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=30`, {
+        const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=30`, {
           headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
         });
         if (response.ok) {
@@ -1066,7 +1122,7 @@ app.all('/api/omnidim/audio-proxy', async (req, res) => {
     // Get or fetch audio buffer
     let audioBuffer = audioBufferCache.get(targetUrl);
     if (!audioBuffer) {
-      const response = await fetch(targetUrl);
+      const response = await omnidimFetch(targetUrl);
       if (!response.ok) {
         return res.status(response.status).send('Audio not found on Omnidimension');
       }
