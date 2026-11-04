@@ -2654,8 +2654,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    // Background dispatch retry with backoff
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    // Snappy background dispatch retry (server handles channel clear backoff)
+    for (let attempt = 1; attempt <= 2; attempt++) {
       if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
       try {
         const res = await fetch('/api/omnidim/dispatch', {
@@ -2680,16 +2680,15 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           break;
         } else {
           dispatchErrorMsg = data?.error || 'कॉल डिस्पैच विफल';
-          if (attempt < 5) {
-            // Wait 2.2s before retry so carrier trunk channel clears
-            await new Promise(r => setTimeout(r, 2200));
+          if (data?.isConcurrencyLimit && attempt < 2) {
+            await new Promise(r => setTimeout(r, 1500));
             continue;
           }
         }
       } catch (err) {
         dispatchErrorMsg = err.message || 'नेटवर्क त्रुटि';
-        if (attempt < 5) {
-          await new Promise(r => setTimeout(r, 1500));
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
       }
@@ -2705,7 +2704,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       // ZERO-SKIP INVARIANT: If carrier trunk channel was temporarily unavailable,
       // re-queue the number to the end of the queue so it is called when channel frees up!
       if (!contact.requeueCount) contact.requeueCount = 0;
-      if (contact.requeueCount < 5) {
+      if (contact.requeueCount < 2) {
         contact.requeueCount++;
         this.activeQueue.push(contact);
         // Do NOT increment this.totalQueued so banner denominator stays fixed
@@ -2754,17 +2753,17 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    const maxPollTimeMs = 40000;
+    const maxPollTimeMs = 35000;
     const startPoll = Date.now();
     let callEnded = false;
 
-    // Fast initial wait of 1.2s so dispatch reaches telecom carrier
-    await new Promise(r => setTimeout(r, 1200));
+    // Fast initial wait of 800ms so dispatch reaches telecom carrier
+    await new Promise(r => setTimeout(r, 800));
 
     while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
       if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
       if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 800));
         continue;
       }
 
@@ -2778,7 +2777,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           const elapsedSec = (Date.now() - dispatchStartTime) / 1000;
-          if (statusData.ended && (elapsedSec >= 2.5 || (statusData.totalSec && statusData.totalSec > 0))) {
+          if (statusData.ended && (elapsedSec >= 2.0 || (statusData.totalSec && statusData.totalSec > 0))) {
             callEnded = true;
             finalStatus = statusData.status || 'failed';
             durationStr = statusData.durationStr || '00:00';
@@ -2791,7 +2790,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         console.warn(`Line ${slotIndex + 1} status polling error:`, e);
       }
 
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     if (!callEnded) {

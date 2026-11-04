@@ -832,8 +832,8 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
 
     let omniResponse = null;
     let omniSuccess = false;
-    // Auto-retry on carrier trunk / concurrency limit with 2.2s delay for SIP channel teardown
-    for (let attempt = 1; attempt <= 6; attempt++) {
+    // Auto-retry on carrier trunk / concurrency limit with snappy delay for channel release
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const response = await fetch(`${OMNIDIM_BASE_URL}/calls/dispatch`, {
           method: 'POST',
@@ -864,16 +864,16 @@ app.post('/api/omnidim/dispatch', async (req, res) => {
         const errorStr = (omniResponse?.detail || omniResponse?.error_description || omniResponse?.error || omniResponse?.message || '').toLowerCase();
         const isConcurrency = /concurrency|limit|busy|channel|active|simultaneous/i.test(errorStr);
 
-        if (isConcurrency && attempt < 6) {
-          console.log(`[Omnidim Dispatch] Concurrency limit active, waiting 2.2s for channel release (attempt ${attempt}/6)...`);
-          await new Promise(r => setTimeout(r, 2200));
+        if (isConcurrency && attempt < 3) {
+          console.log(`[Omnidim Dispatch] Concurrency limit active, waiting 1.5s for channel release (attempt ${attempt}/3)...`);
+          await new Promise(r => setTimeout(r, 1500));
           continue;
         }
         break;
       } catch (e) {
-        console.warn(`Omnidim live dispatch error (attempt ${attempt}/6):`, e.message);
-        if (attempt < 6) {
-          await new Promise(r => setTimeout(r, 1500));
+        console.warn(`Omnidim live dispatch error (attempt ${attempt}/3):`, e.message);
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 800));
           continue;
         }
       }
