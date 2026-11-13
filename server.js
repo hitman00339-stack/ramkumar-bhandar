@@ -1615,12 +1615,23 @@ app.get('*', (req, res) => {
 
 // Start Server if not loaded as a module in tests
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`\n======================================================`);
-    console.log(`  🌾 रामकुमार भंडार - कृषि एवं किराना दुकान प्रबंधन  `);
-    console.log(`  सर्वर सफलतापूर्वक चालू है: http://localhost:${PORT} `);
-    console.log(`======================================================\n`);
-  });
+  function startServer(portToTry) {
+    const server = app.listen(portToTry, () => {
+      console.log(`\n======================================================`);
+      console.log(`  🌾 रामकुमार भंडार - कृषि एवं किराना दुकान प्रबंधन  `);
+      console.log(`  सर्वर सफलतापूर्वक चालू है: http://localhost:${portToTry} `);
+      console.log(`======================================================\n`);
+    });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && portToTry < 3010) {
+        console.warn(`[Port ${portToTry} व्यस्त है। पोर्ट ${portToTry + 1} पर चालू किया जा रहा है...]`);
+        startServer(portToTry + 1);
+      } else {
+        console.error('Server error:', err.message);
+      }
+    });
+  }
+  startServer(Number(PORT));
 }
 
 module.exports = app;
