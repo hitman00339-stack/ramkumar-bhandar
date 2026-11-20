@@ -836,12 +836,44 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
 
 // Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches
 let lastDispatchTimestamp = 0;
-const MIN_DISPATCH_SPACING_MS = 600;
+const MIN_DISPATCH_SPACING_MS = 400;
 
-// Fast micro-cache for Omnidimension calls/logs (1.2s TTL) so concurrent lines don't stall
+// High-speed deduplicated micro-cache for Omnidimension calls/logs (800ms TTL)
 let fastLogsCache = null;
 let fastLogsCacheTime = 0;
-const FAST_LOGS_CACHE_TTL_MS = 1200;
+const FAST_LOGS_CACHE_TTL_MS = 800;
+let pendingLogsFetch = null;
+
+async function getFastLatestLogs() {
+  const now = Date.now();
+  if (fastLogsCache && (now - fastLogsCacheTime) < FAST_LOGS_CACHE_TTL_MS) {
+    return fastLogsCache;
+  }
+  if (pendingLogsFetch) {
+    return pendingLogsFetch;
+  }
+  pendingLogsFetch = (async () => {
+    try {
+      const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=10`, {
+        headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const logs = data.call_log_data || [];
+        if (logs.length > 0) {
+          fastLogsCache = logs;
+          fastLogsCacheTime = Date.now();
+        }
+      }
+    } catch (e) {
+      console.warn('Fast call-status fetch error:', e.message);
+    } finally {
+      pendingLogsFetch = null;
+    }
+    return fastLogsCache || [];
+  })();
+  return pendingLogsFetch;
+}
 
 function parseOmnidimLogTimestamp(rawTime) {
   if (!rawTime) return 0;
@@ -990,31 +1022,9 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       return res.status(400).json({ success: false, error: 'अमान्य मोबाइल नंबर' });
     }
 
-    // Fetch latest 30 logs from Omnidimension with fast 1.2s micro-cache to eliminate roundtrip lag
-    let latestLogs = [];
-    const now = Date.now();
-    if (fastLogsCache && (now - fastLogsCacheTime) < FAST_LOGS_CACHE_TTL_MS) {
-      latestLogs = fastLogsCache;
-    } else {
-      try {
-        const response = await omnidimFetch(`${OMNIDIM_BASE_URL}/calls/logs?pageno=1&pagesize=30`, {
-          headers: { 'Authorization': `Bearer ${OMNIDIM_API_KEY}` }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          latestLogs = data.call_log_data || [];
-          if (latestLogs.length > 0) {
-            fastLogsCache = latestLogs;
-            fastLogsCacheTime = Date.now();
-            db.recordCallHistoryFromLogs(latestLogs, { autoHarvestInbound: true });
-          }
-        }
-      } catch (e) {
-        console.warn('Fast call-status fetch error:', e.message);
-      }
-    }
-
-    const allLogs = latestLogs.length > 0 ? latestLogs : (db.data.omnidimLogsCache || []);
+    // Fetch latest logs from Omnidimension with high-speed in-flight deduplicated micro-cache
+    const latestLogs = await getFastLatestLogs();
+    const allLogs = (latestLogs && latestLogs.length > 0) ? latestLogs : (db.data.omnidimLogsCache || []);
     
     // Find matching fresh log for this phone number
     const sinceMs = req.query.since ? parseInt(req.query.since, 10) : 0;

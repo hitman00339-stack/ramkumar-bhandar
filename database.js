@@ -305,10 +305,26 @@ class Database {
     };
   }
 
-  save() {
+  save(forceImmediate = false) {
     if (this.data) {
       this.data.lastMutationTime = new Date().toISOString();
     }
+    const isTest = process.env.NODE_ENV === 'test';
+    if (!isTest && !forceImmediate) {
+      if (this._saveTimer) clearTimeout(this._saveTimer);
+      this._saveTimer = setTimeout(() => {
+        this._writeDisk();
+      }, 250);
+      return;
+    }
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    this._writeDisk();
+  }
+
+  _writeDisk() {
     const content = JSON.stringify(this.data, null, 2);
     try {
       const tempPath = this.filePath + '.tmp';
@@ -321,7 +337,7 @@ class Database {
         try { fs.unlinkSync(tempPath); } catch (e) {}
       }
     } catch (err) {
-      fs.writeFileSync(this.filePath, content, 'utf8');
+      try { fs.writeFileSync(this.filePath, content, 'utf8'); } catch (e) {}
     }
 
     if (typeof this.onSave === 'function') {

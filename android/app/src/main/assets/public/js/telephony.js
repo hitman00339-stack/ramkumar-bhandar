@@ -2547,14 +2547,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     // Worker 0 starts immediately on Line 1
     this.runCallWorker(0);
 
-    // If there is more than 1 contact, start Worker 1 on Line 2 with a snappy 1000ms initial stagger
+    // If there is more than 1 contact, start Worker 1 on Line 2 with a snappy 500ms initial stagger
     // so both lines become active concurrently right away without idle waiting
     if (validList.length > 1) {
       setTimeout(() => {
         if (this.isAutoDialing || this.isCampaignCalling) {
           this.runCallWorker(1);
         }
-      }, 1000);
+      }, 500);
     }
   },
 
@@ -2614,7 +2614,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
             this.activeSlots[slotIndex].statusText = '⚡ अगला नंबर...';
             this.updateCallingBanner();
           }
-          await new Promise(r => setTimeout(r, 200));
+          await new Promise(r => setTimeout(r, 80));
         } else {
           this.activeSlots[slotIndex] = null;
           this.updateCallingBanner();
@@ -2753,17 +2753,17 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    const maxPollTimeMs = 35000;
+    const maxPollTimeMs = 30000;
     const startPoll = Date.now();
     let callEnded = false;
 
-    // Fast initial wait of 800ms so dispatch reaches telecom carrier
-    await new Promise(r => setTimeout(r, 800));
+    // Fast initial wait of 400ms so dispatch reaches telecom carrier
+    await new Promise(r => setTimeout(r, 400));
 
     while (!callEnded && (Date.now() - startPoll) < maxPollTimeMs) {
       if (!this.isAutoDialing && !this.isCampaignCalling) return { success: false };
       if (this.isAutoDialPaused) {
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, 600));
         continue;
       }
 
@@ -2777,20 +2777,25 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           const elapsedSec = (Date.now() - dispatchStartTime) / 1000;
-          if (statusData.ended && (elapsedSec >= 2.0 || (statusData.totalSec && statusData.totalSec > 0))) {
-            callEnded = true;
-            finalStatus = statusData.status || 'failed';
-            durationStr = statusData.durationStr || '00:00';
-            summary = statusData.summary || '';
-            audioUrl = statusData.audioUrl || null;
-            break;
+          if (statusData.ended) {
+            // Guard against premature match of old call for 'completed'
+            if (statusData.rawStatus === 'completed' && elapsedSec < 1.5 && (!statusData.totalSec || statusData.totalSec === 0)) {
+              // still connecting
+            } else {
+              callEnded = true;
+              finalStatus = statusData.status || 'failed';
+              durationStr = statusData.durationStr || '00:00';
+              summary = statusData.summary || '';
+              audioUrl = statusData.audioUrl || null;
+              break;
+            }
           }
         }
       } catch (e) {
         console.warn(`Line ${slotIndex + 1} status polling error:`, e);
       }
 
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 700));
     }
 
     if (!callEnded) {
