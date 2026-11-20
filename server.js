@@ -838,10 +838,10 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
 let lastDispatchTimestamp = 0;
 const MIN_DISPATCH_SPACING_MS = 400;
 
-// High-speed deduplicated micro-cache for Omnidimension calls/logs (800ms TTL)
+// High-speed deduplicated micro-cache for Omnidimension calls/logs (1200ms TTL)
 let fastLogsCache = null;
 let fastLogsCacheTime = 0;
-const FAST_LOGS_CACHE_TTL_MS = 800;
+const FAST_LOGS_CACHE_TTL_MS = 1200;
 let pendingLogsFetch = null;
 
 async function getFastLatestLogs() {

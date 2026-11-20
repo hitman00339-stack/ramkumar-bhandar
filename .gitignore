@@ -10,6 +10,7 @@ yarn-error.log*
 
 # Database local files & backups (don't commit customer financial data to public repos)
 # data/ramkumar_bhandar.json
+*.bak
 data/backups/
 tests/test_*.json
 
