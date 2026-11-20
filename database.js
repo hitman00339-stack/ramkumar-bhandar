@@ -48,7 +48,7 @@ class Database {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    const isTest = process.env.NODE_ENV === 'test';
+    const isTest = process.env.NODE_ENV === 'test' || (this.filePath && this.filePath.toLowerCase().includes('test'));
     const backupPath = this.filePath + '.bak';
 
     if (fs.existsSync(this.filePath)) {
@@ -364,7 +364,8 @@ class Database {
         try { fs.unlinkSync(tempPath); } catch (e) {}
       }
       // Keep a valid backup copy after successful write in production
-      if (process.env.NODE_ENV !== 'test') {
+      const isTest = process.env.NODE_ENV === 'test' || (this.filePath && this.filePath.toLowerCase().includes('test'));
+      if (!isTest) {
         try {
           fs.copyFileSync(this.filePath, this.filePath + '.bak');
         } catch (bakErr) {}

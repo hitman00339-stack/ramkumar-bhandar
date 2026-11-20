@@ -2753,7 +2753,9 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    const maxPollTimeMs = 30000;
+    // Maximum wait of 65s so active talking calls (30-50s) are never cut short, while
+    // actual no-answers / busy drop immediately via statusData.ended (< 15s)
+    const maxPollTimeMs = 65000;
     const startPoll = Date.now();
     let callEnded = false;
 
