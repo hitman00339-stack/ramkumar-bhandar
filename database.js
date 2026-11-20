@@ -48,36 +48,62 @@ class Database {
       fs.mkdirSync(dir, { recursive: true });
     }
 
+    const backupPath = this.filePath + '.bak';
+
     if (fs.existsSync(this.filePath)) {
       try {
         const raw = fs.readFileSync(this.filePath, 'utf8');
         this.data = JSON.parse(raw);
-        let needsSave = false;
-        if (!this.data.sprayerMachines) {
-          this.data.sprayerMachines = this.getDefaultSprayers();
-          needsSave = true;
-        }
-        if (!this.data.sprayerHistory) {
-          this.data.sprayerHistory = [];
-          needsSave = true;
-        }
-        if (!this.data.contactsBook) {
-          this.data.contactsBook = [];
-          needsSave = true;
-        }
-        if (!this.data.campaignContacts) {
-          this.data.campaignContacts = [];
-          needsSave = true;
-        }
-        if (!this.data.omnidimLogsCache) {
-          this.data.omnidimLogsCache = [];
-          needsSave = true;
-        }
-        if (needsSave) this.save();
-        return;
       } catch (err) {
-        console.error('Error reading database file, re-initializing with seed data:', err.message);
+        console.error('Error reading primary database file:', err.message);
+        // Attempt recovery from .bak
+        if (fs.existsSync(backupPath)) {
+          try {
+            console.log('Attempting recovery from backup file:', backupPath);
+            const bakRaw = fs.readFileSync(backupPath, 'utf8');
+            this.data = JSON.parse(bakRaw);
+            try { fs.writeFileSync(this.filePath, bakRaw, 'utf8'); } catch (wErr) {}
+            console.log('Successfully recovered database from .bak file');
+          } catch (bakErr) {
+            console.error('Recovery from .bak failed:', bakErr.message);
+          }
+        }
       }
+    } else if (fs.existsSync(backupPath)) {
+      try {
+        const bakRaw = fs.readFileSync(backupPath, 'utf8');
+        this.data = JSON.parse(bakRaw);
+        try { fs.writeFileSync(this.filePath, bakRaw, 'utf8'); } catch (wErr) {}
+        console.log('Restored database from existing .bak file');
+      } catch (bakErr) {
+        console.error('Recovery from .bak failed:', bakErr.message);
+      }
+    }
+
+    if (this.data) {
+      let needsSave = false;
+      if (!this.data.sprayerMachines) {
+        this.data.sprayerMachines = this.getDefaultSprayers();
+        needsSave = true;
+      }
+      if (!this.data.sprayerHistory) {
+        this.data.sprayerHistory = [];
+        needsSave = true;
+      }
+      if (!this.data.contactsBook) {
+        this.data.contactsBook = [];
+        needsSave = true;
+      }
+      if (!this.data.campaignContacts) {
+        this.data.campaignContacts = [];
+        needsSave = true;
+      }
+      if (!this.data.omnidimLogsCache) {
+        this.data.omnidimLogsCache = [];
+        needsSave = true;
+      }
+      if (needsSave) this.save();
+      return;
     }
 
     this.data = this.getSeedData();
@@ -336,6 +362,10 @@ class Database {
         fs.copyFileSync(tempPath, this.filePath);
         try { fs.unlinkSync(tempPath); } catch (e) {}
       }
+      // Keep a valid backup copy after successful write
+      try {
+        fs.copyFileSync(this.filePath, this.filePath + '.bak');
+      } catch (bakErr) {}
     } catch (err) {
       try { fs.writeFileSync(this.filePath, content, 'utf8'); } catch (e) {}
     }
