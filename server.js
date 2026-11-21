@@ -1077,7 +1077,21 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
     const isFinished = rawStatus === 'completed' || rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed';
     const finalStatus = rawStatus === 'completed' ? (totalSec > 0 ? 'connected' : 'failed') : (isFinished ? 'failed' : 'calling');
     const durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
-    const summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'सफल बातचीत पूरी हुई' : (rawStatus === 'no-answer' ? 'घंटी बजी पर नहीं उठा' : 'कॉल नहीं लगी'));
+
+    let failureDetail = '';
+    if (matchingLog.hangup_reason === 'Invalid number') {
+      failureDetail = 'अमान्य / बंद नंबर';
+    } else if (matchingLog.hangup_reason === 'Network error') {
+      failureDetail = 'नेटवर्क कवरेज नहीं या स्विच ऑफ';
+    } else if (rawStatus === 'no-answer') {
+      failureDetail = 'घंटी बजी पर उत्तर नहीं मिला';
+    } else if (rawStatus === 'busy') {
+      failureDetail = 'नंबर व्यस्त था';
+    } else {
+      failureDetail = matchingLog.hangup_reason ? `कॉल विफल (${matchingLog.hangup_reason})` : 'कॉल नहीं लगी';
+    }
+
+    const summary = matchingLog.sentiment_analysis_details || matchingLog.call_summary || (totalSec > 0 ? 'सफल बातचीत पूरी हुई' : failureDetail);
     let audioUrl = matchingLog.internal_recording_url || matchingLog.recording_url || null;
     if (audioUrl && audioUrl.startsWith('/')) audioUrl = 'https://omnidim.io' + audioUrl;
 
@@ -1086,6 +1100,8 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
       ended: isFinished,
       status: finalStatus,
       rawStatus,
+      hangupReason: matchingLog.hangup_reason || null,
+      hangupSource: matchingLog.hangup_source || null,
       totalSec,
       durationStr,
       summary,
