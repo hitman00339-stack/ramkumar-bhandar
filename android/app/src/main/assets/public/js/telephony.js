@@ -2547,14 +2547,14 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     // Worker 0 starts immediately on Line 1
     this.runCallWorker(0);
 
-    // If there is more than 1 contact, start Worker 1 on Line 2 with a snappy 500ms initial stagger
-    // so both lines become active concurrently right away without idle waiting
+    // If there is more than 1 contact, start Worker 1 on Line 2 with a clean 1200ms initial stagger
+    // so both lines become active concurrently without telecom SIP trunk race collisions
     if (validList.length > 1) {
       setTimeout(() => {
         if (this.isAutoDialing || this.isCampaignCalling) {
           this.runCallWorker(1);
         }
-      }, 500);
+      }, 1200);
     }
   },
 
@@ -2608,13 +2608,13 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           this.completedCount++;
         }
 
-        // Fast zero-delay line handover: immediately prepare next contact so line never sits idle
+        // Smooth line handover: give carrier trunk 400ms to tear down media session so next call doesn't drop after half-bell
         if (this.queueIndex < this.activeQueue.length && (this.isAutoDialing || this.isCampaignCalling)) {
           if (this.activeSlots[slotIndex]) {
             this.activeSlots[slotIndex].statusText = '⚡ अगला नंबर...';
             this.updateCallingBanner();
           }
-          await new Promise(r => setTimeout(r, 80));
+          await new Promise(r => setTimeout(r, 400));
         } else {
           this.activeSlots[slotIndex] = null;
           this.updateCallingBanner();

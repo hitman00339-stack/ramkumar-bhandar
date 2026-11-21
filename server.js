@@ -834,9 +834,9 @@ app.get('/api/omnidim/call-logs', async (req, res) => {
   }
 });
 
-// Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches
+// Spacing queue to prevent telecom carrier SIP trunk collision on parallel dispatches (1500ms)
 let lastDispatchTimestamp = 0;
-const MIN_DISPATCH_SPACING_MS = 400;
+const MIN_DISPATCH_SPACING_MS = 1500;
 
 // High-speed deduplicated micro-cache for Omnidimension calls/logs (1200ms TTL)
 let fastLogsCache = null;
