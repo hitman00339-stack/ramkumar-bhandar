@@ -1141,6 +1141,27 @@
         </div>
       </div>
 
+      <!-- Server Connection for Mobile APK -->
+      <div class="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm border border-outline-variant/30 flex flex-col gap-space-sm spring-card">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-[24px]">dns</span>
+            <span class="font-headline-sm text-headline-sm text-on-surface font-bold">मोबाइल ऐप सर्वर कनेक्शन</span>
+          </div>
+          <span id="server-status-badge" class="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700">जांच हो रही है...</span>
+        </div>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">
+          मोबाइल ऐप को कंप्यूटर या क्लाउड सर्वर से जोड़ने के लिए यहाँ सर्वर का IP या वेब पता दर्ज करें (उदा. http://192.168.1.5:3000)। खाली रखने पर ऐप पूरी तरह ऑफ़लाइन फोन मेमोरी में सुरक्षित काम करेगा।
+        </p>
+        <div class="flex flex-col sm:flex-row gap-2 pt-1">
+          <input type="text" id="setting-server-url-input" placeholder="उदा. http://192.168.1.100:3000 या https://..." class="flex-1 h-12 px-4 rounded-xl border border-outline-variant bg-surface text-on-surface text-sm font-medium focus:ring-2 focus:ring-primary focus:outline-none"/>
+          <button id="btn-save-server-url" class="h-12 px-5 rounded-xl bg-primary text-on-primary font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm cursor-pointer whitespace-nowrap">
+            <span class="material-symbols-outlined text-[18px]">save</span>
+            <span>सहेजें व जांचें</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Backup & Restore -->
       <div class="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm border border-outline-variant/30 flex flex-col gap-space-sm spring-card">
         <div class="flex items-center gap-2">

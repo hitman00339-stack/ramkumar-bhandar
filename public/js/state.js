@@ -1,3 +1,17 @@
+// Smart Multi-Environment API Base Routing (Browser localhost & Native Android APK)
+(function() {
+  const originalFetch = window.fetch;
+  window.fetch = function(resource, init) {
+    if (typeof resource === 'string' && resource.startsWith('/api/')) {
+      const base = localStorage.getItem('rb_server_base_url');
+      if (base && base.trim()) {
+        resource = base.trim().replace(/\/+$/, '') + resource;
+      }
+    }
+    return originalFetch(resource, init);
+  };
+})();
+
 // State Management & Offline Synchronization Engine
 const AppState = {
   isOnline: navigator.onLine,

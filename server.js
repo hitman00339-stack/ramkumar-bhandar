@@ -1052,8 +1052,8 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
         const rawTime = l.time_of_call || l.created_at || l.timestamp;
         if (rawTime) {
           const logMs = parseOmnidimLogTimestamp(rawTime);
-          // Allow 10s leeway for clock variations
-          if (!isNaN(logMs) && logMs < (sinceMs - 10000)) {
+          // Allow generous 180s leeway for telecom ring latency and clock variations
+          if (!isNaN(logMs) && logMs < (sinceMs - 180000)) {
             return false; // Skip genuinely old historical calls from earlier hours/days
           }
         }
@@ -1071,11 +1071,31 @@ app.get('/api/omnidim/call-status/:phone', async (req, res) => {
     }
 
     const rawStatus = (matchingLog.call_status || '').toLowerCase();
-    const durationSec = matchingLog.call_duration_in_seconds || 0;
-    const durationMin = matchingLog.call_duration_in_minutes || 0;
-    const totalSec = (durationMin * 60) + durationSec;
+    let durationSec = matchingLog.call_duration_in_seconds || 0;
+    let durationMin = matchingLog.call_duration_in_minutes || 0;
+    let totalSec = (durationMin * 60) + durationSec;
+
+    // Fallback: parse formatted call_duration string (e.g. "1.00:57.00" or "01:25")
+    if (totalSec === 0 && matchingLog.call_duration) {
+      const match = String(matchingLog.call_duration).match(/(?:(\d+)\.)?(\d+):(\d+)/);
+      if (match) {
+        const m = parseInt(match[2], 10) || 0;
+        const s = parseInt(match[3], 10) || 0;
+        totalSec = (m * 60) + s;
+        durationMin = Math.floor(totalSec / 60);
+        durationSec = totalSec % 60;
+      }
+    }
+
+    // Check if user answered and interacted in conversation transcript
+    const hasConversation = Boolean(
+      matchingLog.call_conversation && 
+      /user:|caller:|ग्राहक:/i.test(matchingLog.call_conversation)
+    );
+
     const isFinished = rawStatus === 'completed' || rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed';
-    const finalStatus = rawStatus === 'completed' ? (totalSec > 0 ? 'connected' : 'failed') : (isFinished ? 'failed' : 'calling');
+    const isConnected = rawStatus === 'completed' && (totalSec > 0 || hasConversation);
+    const finalStatus = isConnected ? 'connected' : (isFinished ? 'failed' : 'calling');
     const durationStr = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
 
     let failureDetail = '';

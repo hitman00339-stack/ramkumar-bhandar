@@ -517,6 +517,50 @@ const App = {
   },
 
   setupSettingsUI() {
+    // Server URL configuration for Mobile APK & Remote Sync
+    const serverInput = document.getElementById('setting-server-url-input');
+    const saveServerBtn = document.getElementById('btn-save-server-url');
+    const statusBadge = document.getElementById('server-status-badge');
+
+    const updateServerStatusBadge = async () => {
+      if (!statusBadge) return;
+      statusBadge.innerText = 'जांच हो रही है...';
+      statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700';
+      try {
+        const res = await AppState.fetchWithTimeout('/api/sync/version', {}, 3000);
+        if (res.ok) {
+          statusBadge.innerText = '🟢 सर्वर से जुड़ा है';
+          statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800';
+        } else {
+          statusBadge.innerText = '🟡 ऑफ़लाइन मोड (लोकल)';
+          statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
+        }
+      } catch (e) {
+        statusBadge.innerText = '🟡 ऑफ़लाइन मोड (लोकल)';
+        statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
+      }
+    };
+
+    if (serverInput) {
+      serverInput.value = localStorage.getItem('rb_server_base_url') || '';
+      updateServerStatusBadge();
+    }
+
+    if (saveServerBtn && serverInput) {
+      saveServerBtn.addEventListener('click', async () => {
+        const raw = serverInput.value.trim();
+        if (raw) {
+          localStorage.setItem('rb_server_base_url', raw);
+          AppState.showToast('✅ सर्वर पता सहेजा गया, कनेक्शन की जांच की जा रही है...');
+        } else {
+          localStorage.removeItem('rb_server_base_url');
+          AppState.showToast('ℹ️ सर्वर पता हटाया गया - लोकल मोड सक्रिय');
+        }
+        await updateServerStatusBadge();
+        AppState.fetchInitialData();
+      });
+    }
+
     // Export CSVs
     const exportTxnBtn = document.getElementById('btn-export-khatabook');
     if (exportTxnBtn) {

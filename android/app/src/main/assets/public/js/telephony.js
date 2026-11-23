@@ -2826,9 +2826,9 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       this.updateCallingBanner();
     }
 
-    // Maximum wait of 65s so active talking calls (30-50s) are never cut short, while
-    // actual no-answers / busy drop immediately via statusData.ended (< 15s)
-    const maxPollTimeMs = 65000;
+    // Generous wait of 300s (5 minutes) so active conversations (1-4 min) are never cut short.
+    // Unanswered / busy calls drop immediately as soon as telecom carrier returns no-answer (< 18s).
+    const maxPollTimeMs = 300000;
     const startPoll = Date.now();
     let callEnded = false;
 
@@ -2844,7 +2844,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
 
       try {
         const queryParams = new URLSearchParams({
-          since: String(dispatchStartTime - 3000)
+          since: String(dispatchStartTime - 180000)
         });
         if (omniCallId) queryParams.set('callId', String(omniCallId));
 
@@ -2858,7 +2858,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
               // still connecting
             } else {
               callEnded = true;
-              finalStatus = statusData.status || 'failed';
+              finalStatus = statusData.status || (statusData.totalSec > 0 ? 'connected' : 'failed');
               durationStr = statusData.durationStr || '00:00';
               summary = statusData.summary || '';
               audioUrl = statusData.audioUrl || null;
@@ -2874,8 +2874,25 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }
 
     if (!callEnded) {
-      finalStatus = 'failed';
-      summary = 'घंटी बजी पर उत्तर नहीं मिला';
+      // Check one last time before concluding
+      try {
+        const finalCheck = await fetch(`/api/omnidim/call-status/${cleanPhone}?callId=${omniCallId || ''}`);
+        if (finalCheck.ok) {
+          const d = await finalCheck.json();
+          if (d.status === 'connected' || (d.totalSec && d.totalSec > 0)) {
+            finalStatus = 'connected';
+            durationStr = d.durationStr || '00:00';
+            summary = d.summary || 'सफल बातचीत पूरी हुई';
+            audioUrl = d.audioUrl || null;
+            callEnded = true;
+          }
+        }
+      } catch (e) {}
+
+      if (!callEnded) {
+        finalStatus = 'failed';
+        summary = 'घंटी बजी पर उत्तर नहीं मिला';
+      }
     }
 
     if (this.activeSlots[slotIndex]) {
@@ -2911,11 +2928,13 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     if (contact.isGSheet) {
       const todayStr = new Date().toLocaleDateString('en-GB');
       const nowTimeStr = new Date().toLocaleTimeString('en-IN', { hour12: true });
-      const finalDur = finalStatus === 'connected' ? durationStr : 'नहीं उठा (00:00)';
+      const isConnectedCall = finalStatus === 'connected' || (durationStr && durationStr !== '00:00');
+      const finalDur = isConnectedCall ? (durationStr || '00:01') : 'नहीं उठा (00:00)';
+      const statusToSend = isConnectedCall ? 'connected' : 'failed';
 
       const gMatch = (this.gsheetRows || []).find(r => r.rowNumber === contact.rowNumber || r.cleanPhone === cleanPhone);
       if (gMatch) {
-        gMatch.status = finalStatus;
+        gMatch.status = statusToSend;
         gMatch.date = todayStr;
         gMatch.timestamp = nowTimeStr;
         gMatch.duration = finalDur;
@@ -2930,7 +2949,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           date: todayStr,
           timestamp: nowTimeStr,
           duration: finalDur,
-          status: finalStatus,
+          status: statusToSend,
           summary
         })
       }).catch(err => console.warn('GSheet update-row err:', err));
