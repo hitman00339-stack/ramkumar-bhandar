@@ -48795,7 +48795,7 @@
       "lastCallAt": null
     }
   ],
-  "lastMutationTime": "2026-11-23T13:29:35.790Z",
+  "lastMutationTime": "2026-11-23T13:40:16.006Z",
   "contactsBook": [
     {
       "id": "cont_6393459745",
@@ -537637,8 +537637,8 @@
     }
   ],
   "gsheetConfig": {
-    "url": "",
+    "url": "https://script.google.com/macros/s/AKfycby71w5SfB_7MFdrGwsYRkqu3yLbC38qZeOOKh3crJ4FasOIkV6B8ulu-BkNOWZB8EIt/exec",
     "autoResume": true,
-    "lastSynced": null
+    "lastSynced": "2026-11-23T13:40:16.006Z"
   }
 }
