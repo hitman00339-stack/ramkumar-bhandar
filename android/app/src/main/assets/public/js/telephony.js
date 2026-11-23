@@ -25,6 +25,12 @@ const TelephonyUI = {
   campaignCurrentIndex: 0,
   isCampaignCalling: false,
 
+  // Google Sheet Integration & Auto-Dialer State
+  gsheetConfig: { url: '', autoResume: true, lastSynced: null },
+  gsheetRows: [],
+  isGSheetLoading: false,
+  gsheetSearchQuery: '',
+
   // Permanent Contacts Book (Cross-campaign directory, zero duplicates)
   contactsBook: [],
 
@@ -50,6 +56,9 @@ const TelephonyUI = {
 
       const savedCamp = localStorage.getItem('rb_cached_campaign_contacts');
       if (savedCamp) this.campaignContacts = JSON.parse(savedCamp);
+
+      const savedGSheet = localStorage.getItem('rb_cached_gsheet_rows');
+      if (savedGSheet) this.gsheetRows = JSON.parse(savedGSheet);
     } catch (e) {
       console.warn('LocalStorage restore error:', e);
     }
@@ -63,6 +72,7 @@ const TelephonyUI = {
     }
 
     // 3. Smooth background fetch over internet
+    this.fetchGSheetConfig();
     this.refreshAllData();
 
     // 4. Auto-refresh Omnidimension logs every 20 seconds when visible
@@ -77,6 +87,7 @@ const TelephonyUI = {
     await Promise.allSettled([
       this.fetchContactsBook(),
       this.fetchCampaignContacts(),
+      this.fetchGSheetConfig(),
       this.fetchLiveOmnidimLogs(true)
     ]);
     try {
@@ -285,7 +296,7 @@ const TelephonyUI = {
     this.currentCallTab = tab;
     this.selectedInTab.clear();
 
-    const tabs = ['all', 'connected', 'short', 'failed', 'pending', 'total_all', 'inauguration'];
+    const tabs = ['all', 'connected', 'short', 'failed', 'pending', 'total_all', 'gsheet', 'inauguration'];
     tabs.forEach(t => {
       const btn = document.getElementById(`tab-btn-${t}`);
       if (btn) {
@@ -296,6 +307,10 @@ const TelephonyUI = {
         }
       }
     });
+
+    if (tab === 'gsheet' && (!this.gsheetRows || this.gsheetRows.length === 0) && this.gsheetConfig?.url) {
+      this.fetchGSheetRows(false);
+    }
 
     try {
       this.renderCurrentTab();
@@ -1136,6 +1151,7 @@ const TelephonyUI = {
     const bPend = document.getElementById('badge-count-pending');
     const bTotAll = document.getElementById('badge-count-total_all');
     const bInaug = document.getElementById('badge-count-inauguration');
+    const bGSheet = document.getElementById('badge-count-gsheet');
     if (bAll) bAll.innerText = allCalls.length;
     if (bConn) bConn.innerText = connectedCalls.length;
     if (bShort) bShort.innerText = shortCalls.length;
@@ -1143,6 +1159,21 @@ const TelephonyUI = {
     if (bPend) bPend.innerText = allPendingCalls.length;
     if (bTotAll) bTotAll.innerText = totalAllList.length;
     if (bInaug) bInaug.innerText = inaugurationCalls.length;
+    if (bGSheet) {
+      const pendingGSheet = (this.gsheetRows || []).filter(r => !r.isCalled).length;
+      bGSheet.innerText = pendingGSheet > 0 ? pendingGSheet : (this.gsheetRows ? this.gsheetRows.length : 0);
+    }
+
+    // Google Sheet Workspace View
+    if (this.currentCallTab === 'gsheet') {
+      const toolbar = document.getElementById('call-tab-toolbar');
+      if (toolbar) {
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+      }
+      container.innerHTML = this.renderGSheetWorkspace();
+      return;
+    }
 
     // Show/Hide Batch Toolbar
     const toolbar = document.getElementById('call-tab-toolbar');
@@ -2503,8 +2534,9 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const seen = new Set();
     for (const c of contactsList) {
       const clean = (c.cleanPhone || c.rawPhone || c.phone || '').replace(/\D/g, '').slice(-10);
-      if (clean.length === 10 && !seen.has(clean)) {
-        seen.add(clean);
+      const dedupeKey = c.isGSheet ? (`gsheet_row_${c.rowNumber}_${clean}`) : clean;
+      if (clean.length === 10 && !seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
         validList.push({
           id: c.id || ('dial_' + clean + '_' + Date.now()),
           name: c.customerName || c.name || 'ग्रामवासी / ग्राहक',
@@ -2512,8 +2544,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           cleanPhone: clean,
           prompt: c.prompt || defaultPrompt,
           due: c.due || c.dueAmount || 0,
-          shopId: c.shopId || (isCampaign ? 'kirana' : AppState.currentShopId),
-          campaign: isCampaign ? 'inauguration' : (c.campaign || undefined),
+          shopId: c.shopId || (isCampaign && !c.isGSheet ? 'kirana' : (c.shopId || AppState.currentShopId)),
+          campaign: c.campaign || (isCampaign ? 'inauguration' : undefined),
+          isGSheet: Boolean(c.isGSheet),
+          rowNumber: c.rowNumber || null,
           requeueCount: 0
         });
       }
@@ -2630,10 +2664,17 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     if (campMatch) {
       campMatch.status = 'calling';
       try {
-      this.renderCurrentTab();
-    } catch (e) {
-      console.warn('renderCurrentTab error in worker:', e);
+        this.renderCurrentTab();
+      } catch (e) {
+        console.warn('renderCurrentTab error in worker:', e);
+      }
     }
+    if (contact.isGSheet) {
+      const gMatch = (this.gsheetRows || []).find(r => r.rowNumber === contact.rowNumber || r.cleanPhone === cleanPhone);
+      if (gMatch) {
+        gMatch.status = 'calling';
+        try { this.renderCurrentTab(); } catch (e) {}
+      }
     }
     fetch('/api/campaign/update-status', {
       method: 'POST',
@@ -2739,6 +2780,33 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         campMatch.summary = summary;
         campMatch.lastCallAt = new Date().toISOString();
       }
+
+      if (contact.isGSheet) {
+        const todayStr = new Date().toLocaleDateString('en-GB');
+        const nowTimeStr = new Date().toLocaleTimeString('en-IN', { hour12: true });
+        const gMatch = (this.gsheetRows || []).find(r => r.rowNumber === contact.rowNumber || r.cleanPhone === cleanPhone);
+        if (gMatch) {
+          gMatch.status = 'failed';
+          gMatch.date = todayStr;
+          gMatch.timestamp = nowTimeStr;
+          gMatch.duration = 'नहीं उठा (00:00)';
+          gMatch.isCalled = true;
+        }
+        fetch('/api/gsheet/update-row', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rowNumber: contact.rowNumber,
+            phone: cleanPhone,
+            date: todayStr,
+            timestamp: nowTimeStr,
+            duration: 'नहीं उठा (00:00)',
+            status: 'failed',
+            summary
+          })
+        }).catch(err => console.warn('GSheet update-row on dispatch fail err:', err));
+        try { localStorage.setItem('rb_cached_gsheet_rows', JSON.stringify(this.gsheetRows)); } catch (e) {}
+      }
       try {
       this.renderCurrentTab();
     } catch (e) {
@@ -2833,6 +2901,38 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
       campMatch.summary = summary;
       campMatch.audioUrl = audioUrl;
       campMatch.lastCallAt = new Date().toISOString();
+    }
+
+    if (contact.isGSheet) {
+      const todayStr = new Date().toLocaleDateString('en-GB');
+      const nowTimeStr = new Date().toLocaleTimeString('en-IN', { hour12: true });
+      const finalDur = finalStatus === 'connected' ? durationStr : 'नहीं उठा (00:00)';
+
+      const gMatch = (this.gsheetRows || []).find(r => r.rowNumber === contact.rowNumber || r.cleanPhone === cleanPhone);
+      if (gMatch) {
+        gMatch.status = finalStatus;
+        gMatch.date = todayStr;
+        gMatch.timestamp = nowTimeStr;
+        gMatch.duration = finalDur;
+        gMatch.isCalled = true;
+      }
+      fetch('/api/gsheet/update-row', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rowNumber: contact.rowNumber,
+          phone: cleanPhone,
+          date: todayStr,
+          timestamp: nowTimeStr,
+          duration: finalDur,
+          status: finalStatus,
+          summary
+        })
+      }).catch(err => console.warn('GSheet update-row err:', err));
+
+      try {
+        localStorage.setItem('rb_cached_gsheet_rows', JSON.stringify(this.gsheetRows));
+      } catch (e) {}
     }
 
     try {
@@ -3725,6 +3825,519 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     const name = this.activeProfileContact.name || 'ग्राहक';
     this.closeCustomerProfileModal();
     this.redialCustomer(phone, name);
+  },
+
+  // ----------------------------------------------------
+  // GOOGLE SHEET SYNC, REAL-TIME LOGGING & AUTO-DIALER
+  // ----------------------------------------------------
+  async fetchGSheetConfig() {
+    try {
+      const res = await fetch('/api/gsheet/config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.config) {
+          this.gsheetConfig = data.config;
+        }
+      }
+    } catch (err) {
+      console.warn('fetchGSheetConfig error:', err.message);
+    }
+  },
+
+  async saveGSheetUrl(newUrl = null) {
+    const input = document.getElementById('gsheet-url-input');
+    const url = (newUrl !== null ? newUrl : (input ? input.value : '')).trim();
+    if (!url) {
+      alert('कृपया मान्य Google Apps Script Web App URL दर्ज करें');
+      return;
+    }
+    try {
+      const res = await fetch('/api/gsheet/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        this.gsheetConfig.url = url;
+        AppState.showToast('✅ Google Sheet Web App URL सुरक्षित किया गया!');
+        await this.fetchGSheetRows(true);
+      } else {
+        alert('त्रुटि: ' + (data.error || 'URL सहेजा नहीं जा सका'));
+      }
+    } catch (err) {
+      alert('नेटवर्क त्रुटि: ' + err.message);
+    }
+  },
+
+  async fetchGSheetRows(showToast = false) {
+    const input = document.getElementById('gsheet-url-input');
+    const url = (this.gsheetConfig?.url || (input ? input.value : '')).trim();
+    if (!url) {
+      if (showToast) alert('कृपया पहले Google Sheet Web App URL दर्ज करके "सहेजें" दबाएं');
+      return;
+    }
+
+    this.isGSheetLoading = true;
+    try { this.renderCurrentTab(); } catch (e) {}
+
+    try {
+      const res = await fetch(`/api/gsheet/contacts?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      if (res.ok && data.success) {
+        this.gsheetRows = data.rows || [];
+        try {
+          localStorage.setItem('rb_cached_gsheet_rows', JSON.stringify(this.gsheetRows));
+        } catch (e) {}
+
+        const bGSheet = document.getElementById('badge-count-gsheet');
+        if (bGSheet) {
+          const pending = (this.gsheetRows || []).filter(r => !r.isCalled).length;
+          bGSheet.innerText = pending > 0 ? pending : (this.gsheetRows ? this.gsheetRows.length : 0);
+        }
+
+        if (showToast) {
+          AppState.showToast(`📊 Google Sheet: कुल ${data.total} नंबर मिले (${data.pendingCount} बाकी, ${data.completedCount} कॉल्ड)`);
+        }
+      } else {
+        if (showToast) alert('Google Sheet लोड करने में त्रुटि: ' + (data.error || 'अज्ञात त्रुटि'));
+      }
+    } catch (err) {
+      if (showToast) alert('शीट लोड करने में असमर्थ: ' + err.message);
+    } finally {
+      this.isGSheetLoading = false;
+      try { this.renderCurrentTab(); } catch (e) {}
+    }
+  },
+
+  filterGSheetRows(query) {
+    this.gsheetSearchQuery = (query || '').trim().toLowerCase();
+    try { this.renderCurrentTab(); } catch (e) {}
+  },
+
+  startGSheetDialing(resumeOnly = true) {
+    if (!this.gsheetRows || this.gsheetRows.length === 0) {
+      alert('Google Sheet में कोई नंबर नहीं मिला। कृपया पहले "🔄 शीट लोड करें" दबाएं।');
+      return;
+    }
+
+    let targetRows = this.gsheetRows;
+    if (resumeOnly) {
+      targetRows = this.gsheetRows.filter(r => !r.isCalled);
+      if (targetRows.length === 0) {
+        alert('🎉 Google Sheet के सभी नंबरों पर पहले ही कॉल हो चुकी है!\n\nयदि आप सभी नंबरों पर दोबारा कॉल करना चाहते हैं, तो "🔁 शुरू से सभी पर पुनः कॉल करें" विकल्प चुनें।');
+        return;
+      }
+    }
+
+    // Sort strictly in ascending sheet order
+    targetRows = [...targetRows].sort((a, b) => (a.rowNumber || 0) - (b.rowNumber || 0));
+
+    const firstRow = targetRows[0].rowNumber;
+    const confirmMsg = resumeOnly
+      ? `क्या आप Google Sheet से पंक्ति ${firstRow} से शुरू करके कुल ${targetRows.length} बाकी नंबरों पर 2-लाइन AI कॉलिंग प्रारंभ करना चाहते हैं?\n\n(कॉल समाप्त होते ही तारीख, समय और अवधि सीधे Google Sheet में दर्ज हो जाएगी)`
+      : `क्या आप Google Sheet के सभी ${targetRows.length} नंबरों पर पंक्ति 2 से शुरू करके 2-लाइन AI कॉलिंग प्रारंभ करना चाहते हैं?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    const defaultPrompt = (document.getElementById('bulk-prompt-input')?.value) ||
+      'नमस्ते! रामकुमार किराना एवं जनरल स्टोर, कुँवरगद्दी से सूचना है। धन्यवाद!';
+
+    const contactsToDial = targetRows.map(r => ({
+      id: 'gsheet_' + r.rowNumber + '_' + r.cleanPhone,
+      rowNumber: r.rowNumber,
+      cleanPhone: r.cleanPhone,
+      phone: r.phone || (`+91 ${r.cleanPhone.slice(0, 5)} ${r.cleanPhone.slice(5)}`),
+      name: `ग्राहक (पंक्ति ${r.rowNumber})`,
+      isGSheet: true,
+      campaign: 'gsheet',
+      prompt: defaultPrompt
+    }));
+
+    this.startConcurrentDialing(contactsToDial, true, defaultPrompt);
+  },
+
+  dialSingleGSheetRow(rowNumber) {
+    const row = (this.gsheetRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row || !row.cleanPhone) {
+      alert('पंक्ति या फोन नंबर नहीं मिला');
+      return;
+    }
+    const defaultPrompt = (document.getElementById('bulk-prompt-input')?.value) ||
+      'नमस्ते! रामकुमार किराना एवं जनरल स्टोर से सूचना है। धन्यवाद!';
+    const contact = {
+      id: 'gsheet_' + row.rowNumber + '_' + row.cleanPhone,
+      rowNumber: row.rowNumber,
+      cleanPhone: row.cleanPhone,
+      phone: row.phone || (`+91 ${row.cleanPhone.slice(0, 5)} ${row.cleanPhone.slice(5)}`),
+      name: `ग्राहक (पंक्ति ${row.rowNumber})`,
+      isGSheet: true,
+      campaign: 'gsheet',
+      prompt: defaultPrompt
+    };
+    this.startConcurrentDialing([contact], false, defaultPrompt);
+  },
+
+  openGSheetScriptModal() {
+    const modal = document.getElementById('modal-gsheet-script');
+    if (!modal) return;
+    const area = document.getElementById('gsheet-script-code-area');
+    if (area) {
+      area.value = GSHEET_APPS_SCRIPT_TEMPLATE_CODE;
+    }
+    modal.classList.remove('hidden');
+  },
+
+  closeGSheetScriptModal() {
+    const modal = document.getElementById('modal-gsheet-script');
+    if (modal) modal.classList.add('hidden');
+  },
+
+  copyGSheetScriptCode() {
+    const area = document.getElementById('gsheet-script-code-area');
+    if (!area) return;
+    navigator.clipboard.writeText(area.value || GSHEET_APPS_SCRIPT_TEMPLATE_CODE).then(() => {
+      const textSpan = document.getElementById('btn-copy-gsheet-code-text');
+      if (textSpan) {
+        textSpan.innerText = '✓ कॉपी हो गया!';
+        setTimeout(() => { textSpan.innerText = 'कोड कॉपी करें'; }, 2000);
+      }
+      AppState.showToast('📋 Google Apps Script कोड क्लिपबोर्ड पर कॉपी हो गया!');
+    }).catch(err => {
+      area.select();
+      document.execCommand('copy');
+      AppState.showToast('📋 कोड कॉपी हुआ!');
+    });
+  },
+
+  renderGSheetWorkspace() {
+    const rows = this.gsheetRows || [];
+    const totalCount = rows.length;
+    const completedCount = rows.filter(r => r.isCalled).length;
+    const pendingCount = totalCount - completedCount;
+    const firstPending = rows.find(r => !r.isCalled);
+    const resumeDisplay = firstPending ? `पंक्ति ${firstPending.rowNumber} (+91 ${firstPending.cleanPhone})` : 'सभी कॉल पूर्ण';
+
+    // Filter rows if search query is active
+    let displayRows = rows;
+    if (this.gsheetSearchQuery) {
+      const q = this.gsheetSearchQuery;
+      displayRows = rows.filter(r => (r.phone && r.phone.toLowerCase().includes(q)) || (r.cleanPhone && r.cleanPhone.includes(q)) || String(r.rowNumber).includes(q));
+    }
+
+    const currentUrl = this.gsheetConfig?.url || '';
+
+    return `
+      <div class="flex flex-col gap-4 animate-fade-in">
+        
+        <!-- TOP CONFIGURATION & SYNC CARD -->
+        <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-3">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div class="flex items-center gap-2.5">
+              <div class="w-10 h-10 rounded-2xl bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <span class="material-symbols-outlined text-[22px]">table_chart</span>
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 text-sm md:text-base flex items-center gap-2">
+                  <span>Google Sheets स्वचालित कॉलिंग एवं रियल-टाइम सिंक</span>
+                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    2-लाइन AI इंजन
+                  </span>
+                </h3>
+                <p class="text-xs text-slate-500">शीट से एक-एक नंबर उठाकर कॉल करें और तारीख, समय व बातचीत अवधि स्वतः दर्ज करें</p>
+              </div>
+            </div>
+            <button onclick="TelephonyUI.openGSheetScriptModal()" class="h-8 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0">
+              <span class="material-symbols-outlined text-[16px] text-emerald-700">integration_instructions</span>
+              <span>Apps Script कोड व गाइड</span>
+            </button>
+          </div>
+
+          <!-- URL INPUT BAR -->
+          <div class="flex flex-col md:flex-row items-stretch md:items-center gap-2">
+            <div class="relative flex-1">
+              <span class="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">link</span>
+              <input type="url" id="gsheet-url-input" value="${currentUrl}" placeholder="Google Apps Script Web App URL यहाँ पेस्ट करें (https://script.google.com/macros/s/.../exec)" class="w-full h-10 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-300 text-xs font-mono text-slate-900 outline-none focus:border-emerald-600 focus:bg-white transition-all"/>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button onclick="TelephonyUI.saveGSheetUrl()" class="h-10 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[16px]">save</span>
+                <span>💾 URL सहेजें</span>
+              </button>
+              <button onclick="TelephonyUI.fetchGSheetRows(true)" class="h-10 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[16px] ${this.isGSheetLoading ? 'animate-spin text-emerald-700' : 'text-slate-600'}">sync</span>
+                <span>${this.isGSheetLoading ? 'लोड हो रहा है...' : '🔄 शीट लोड करें'}</span>
+              </button>
+            </div>
+          </div>
+          
+          ${this.gsheetConfig?.lastSynced ? `
+            <div class="text-[11px] text-slate-500 flex items-center gap-1">
+              <span class="material-symbols-outlined text-[14px] text-emerald-600">check_circle</span>
+              <span>अंतिम सिंक: <b>${new Date(this.gsheetConfig.lastSynced).toLocaleString('hi-IN', { hour12: true })}</b></span>
+            </div>
+          ` : ''}
+        </div>
+
+        <!-- METRICS TILES -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs flex flex-col gap-1">
+            <span class="text-xs text-slate-500 font-medium">कुल पंक्तियां (Total)</span>
+            <span class="text-2xl font-black text-slate-900 font-numeric-display">${totalCount}</span>
+            <span class="text-[10px] text-slate-400">शीट में मौजूद वैध नंबर</span>
+          </div>
+          <div class="p-3.5 bg-white rounded-2xl border border-emerald-200 bg-emerald-50/30 shadow-2xs flex flex-col gap-1">
+            <span class="text-xs text-emerald-700 font-medium">कॉल पूर्ण (Called)</span>
+            <span class="text-2xl font-black text-emerald-800 font-numeric-display">${completedCount}</span>
+            <span class="text-[10px] text-emerald-600">स्किप होंगे (Auto-Resume)</span>
+          </div>
+          <div class="p-3.5 bg-white rounded-2xl border border-amber-200 bg-amber-50/30 shadow-2xs flex flex-col gap-1">
+            <span class="text-xs text-amber-700 font-medium">शेष बाकी (Pending)</span>
+            <span class="text-2xl font-black text-amber-800 font-numeric-display">${pendingCount}</span>
+            <span class="text-[10px] text-amber-600">अगली कॉलिंग में डायल होंगे</span>
+          </div>
+          <div class="p-3.5 bg-white rounded-2xl border border-indigo-200 bg-indigo-50/30 shadow-2xs flex flex-col gap-1">
+            <span class="text-xs text-indigo-700 font-medium">अगला कॉल नंबर (Resume)</span>
+            <span class="text-sm font-bold text-indigo-900 truncate font-numeric-display mt-1">${resumeDisplay}</span>
+            <span class="text-[10px] text-indigo-600">यहीं से शुरू होगी कॉलिंग</span>
+          </div>
+        </div>
+
+        <!-- ACTION CALLING CONTROLS -->
+        <div class="p-4 bg-gradient-to-r from-emerald-900 to-[#003629] rounded-3xl text-white shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div class="w-12 h-12 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center shrink-0">
+              <span class="material-symbols-outlined text-[28px] text-emerald-300">phone_forwarded</span>
+            </div>
+            <div>
+              <h4 class="font-bold text-sm md:text-base">Google Sheet 2-लाइन AI कॉलिंग प्रारंभ करें</h4>
+              <p class="text-xs text-emerald-200">
+                ${pendingCount > 0 ? `बाकी ${pendingCount} नंबरों पर कॉल लगेगी (पहले से कॉल्ड स्वतः छोड़ दिए जाएंगे)` : 'शीट के सभी नंबरों पर कॉल पूरी हो चुकी है'}
+              </p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 w-full sm:w-auto">
+            <button onclick="TelephonyUI.startGSheetDialing(true)" ${pendingCount === 0 ? 'disabled' : ''} class="flex-1 sm:flex-initial h-11 px-5 rounded-2xl ${pendingCount === 0 ? 'bg-white/20 text-white/50 cursor-not-allowed' : 'bg-white hover:bg-emerald-50 text-emerald-950 font-black shadow-md active:scale-95 cursor-pointer'} text-xs md:text-sm flex items-center justify-center gap-2 transition-all">
+              <span class="material-symbols-outlined text-[18px] text-emerald-700">rocket_launch</span>
+              <span>कॉलिंग शुरू करें (${pendingCount} बाकी)</span>
+            </button>
+            ${completedCount > 0 ? `
+              <button onclick="TelephonyUI.startGSheetDialing(false)" title="शुरू से सभी नंबरों पर पुनः कॉल करें" class="h-11 px-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[16px]">replay</span>
+                <span class="hidden md:inline">पुनः सभी पर</span>
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        <!-- TABLE SECTION -->
+        <div class="p-4 bg-white rounded-3xl border border-slate-200 shadow-xs flex flex-col gap-3">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <h4 class="font-bold text-slate-900 text-xs md:text-sm">Google Sheet संपर्क तालिका</h4>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">${displayRows.length} पंक्तियां</span>
+            </div>
+            <div class="relative w-full sm:w-64">
+              <span class="material-symbols-outlined absolute left-2.5 top-2 text-slate-400 text-[16px]">search</span>
+              <input type="text" oninput="TelephonyUI.filterGSheetRows(this.value)" value="${this.gsheetSearchQuery || ''}" placeholder="नंबर या पंक्ति खोजें..." class="w-full h-8 pl-8 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 outline-none focus:border-emerald-600 focus:bg-white transition-all"/>
+            </div>
+          </div>
+
+          ${totalCount === 0 ? `
+            <div class="p-10 text-center flex flex-col items-center justify-center gap-2 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              <span class="material-symbols-outlined text-[44px] text-slate-400">playlist_add</span>
+              <p class="font-bold text-slate-800 text-sm">अभी कोई संपर्क लोड नहीं हुआ है</p>
+              <p class="text-xs text-slate-500 max-w-md">ऊपर दिए गए बॉक्स में अपनी Google Sheet Web App URL पेस्ट करें और "🔄 शीट लोड करें" दबाएं।</p>
+              <button onclick="TelephonyUI.openGSheetScriptModal()" class="mt-2 h-8 px-4 rounded-xl bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer">
+                Apps Script सेटअप गाइड देखें
+              </button>
+            </div>
+          ` : `
+            <div class="overflow-x-auto rounded-2xl border border-slate-200">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr class="bg-slate-100/90 text-slate-700 font-bold border-b border-slate-200 text-[11px]">
+                    <th class="py-2.5 px-3"># पंक्ति</th>
+                    <th class="py-2.5 px-3">मोबाइल नंबर (Col A)</th>
+                    <th class="py-2.5 px-3">कॉल तारीख (Col B)</th>
+                    <th class="py-2.5 px-3">समय (Col C)</th>
+                    <th class="py-2.5 px-3">अवधि (Col D)</th>
+                    <th class="py-2.5 px-3">स्थिति (Status)</th>
+                    <th class="py-2.5 px-3 text-right">त्वरित एक्शन</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 font-medium">
+                  ${displayRows.map(r => {
+                    const isCalling = r.status === 'calling';
+                    let statusBadge = `<span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">⏳ प्रतीक्षारत (Pending)</span>`;
+                    if (isCalling) {
+                      statusBadge = `<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 text-[10px] font-bold animate-pulse">📞 कॉल जारी...</span>`;
+                    } else if (r.isCalled) {
+                      if (r.status === 'connected' || (r.duration && !r.duration.includes('नहीं उठा') && r.duration !== '00:00')) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">✅ बात हुई</span>`;
+                      } else {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-bold">❌ नहीं उठा</span>`;
+                      }
+                    }
+
+                    return `
+                      <tr class="hover:bg-slate-50 transition-colors ${isCalling ? 'bg-blue-50/60' : ''}">
+                        <td class="py-2.5 px-3 font-mono font-bold text-slate-500">${r.rowNumber}</td>
+                        <td class="py-2.5 px-3">
+                          <span class="font-mono font-bold text-slate-900">+91 ${r.cleanPhone.slice(0, 5)} ${r.cleanPhone.slice(5)}</span>
+                        </td>
+                        <td class="py-2.5 px-3 font-mono text-slate-700">${r.date || '<span class="text-slate-300">--</span>'}</td>
+                        <td class="py-2.5 px-3 font-mono text-slate-700">${r.timestamp || '<span class="text-slate-300">--</span>'}</td>
+                        <td class="py-2.5 px-3 font-mono font-bold text-slate-800">${r.duration || '<span class="text-slate-300 font-normal">--</span>'}</td>
+                        <td class="py-2.5 px-3">${statusBadge}</td>
+                        <td class="py-2.5 px-3 text-right">
+                          <button onclick="TelephonyUI.dialSingleGSheetRow(${r.rowNumber})" class="h-7 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer">
+                            <span class="material-symbols-outlined text-[13px]">call</span>
+                            <span>कॉल</span>
+                          </button>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+
+      </div>
+    `;
+  }
+};
+
+const GSHEET_APPS_SCRIPT_TEMPLATE_CODE = `/**
+ * 🌾 रामकुमार भंडार - Google Sheets AI Calling Apps Script
+ * =========================================================================
+ * निर्देश:
+ * 1. अपनी Google Sheet में 4 हेडर रखें:
+ *    Column A: मोबाइल (Phone)
+ *    Column B: तारीख (Date)
+ *    Column C: समय (Timestamp)
+ *    Column D: बातचीत अवधि (Duration)
+ * 2. Extensions > Apps Script में यह कोड पेस्ट करें।
+ * 3. Deploy > New Deployment > Web app > Access: 'Anyone' चुनें।
+ * 4. मिला हुआ Web App URL ऐप में पेस्ट करें।
+ * =========================================================================
+ */
+
+function doGet(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var lastRow = sheet.getLastRow();
+    
+    if (lastRow < 2) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        total: 0,
+        pendingCount: 0,
+        completedCount: 0,
+        rows: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var range = sheet.getRange(2, 1, lastRow - 1, 4);
+    var values = range.getValues();
+    var rows = [];
+    var pendingCount = 0;
+    var completedCount = 0;
+    
+    for (var i = 0; i < values.length; i++) {
+      var rowNum = i + 2;
+      var rawPhone = values[i][0] !== null && values[i][0] !== undefined ? String(values[i][0]).trim() : '';
+      var dateVal = values[i][1] !== null && values[i][1] !== undefined ? String(values[i][1]).trim() : '';
+      var timeVal = values[i][2] !== null && values[i][2] !== undefined ? String(values[i][2]).trim() : '';
+      var durVal = values[i][3] !== null && values[i][3] !== undefined ? String(values[i][3]).trim() : '';
+      
+      var clean = rawPhone.replace(/\\D/g, '').slice(-10);
+      if (clean.length === 10) {
+        var isCalled = Boolean(dateVal || timeVal || durVal);
+        if (isCalled) {
+          completedCount++;
+        } else {
+          pendingCount++;
+        }
+        
+        rows.push({
+          rowNumber: rowNum,
+          phone: rawPhone,
+          cleanPhone: clean,
+          date: dateVal,
+          timestamp: timeVal,
+          duration: durVal,
+          isCalled: isCalled
+        });
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      total: rows.length,
+      pendingCount: pendingCount,
+      completedCount: completedCount,
+      rows: rows
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    var raw = e.postData && e.postData.contents ? e.postData.contents : '{}';
+    var data = JSON.parse(raw);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var rowNumber = parseInt(data.rowNumber, 10);
+    
+    if (rowNumber && rowNumber >= 2) {
+      if (data.date !== undefined && data.date !== null) sheet.getRange(rowNumber, 2).setValue(String(data.date));
+      if (data.timestamp !== undefined && data.timestamp !== null) sheet.getRange(rowNumber, 3).setValue(String(data.timestamp));
+      if (data.duration !== undefined && data.duration !== null) sheet.getRange(rowNumber, 4).setValue(String(data.duration));
+      SpreadsheetApp.flush();
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        updatedRow: rowNumber,
+        message: 'Row ' + rowNumber + ' updated successfully'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var cleanPhone = (data.phone || '').replace(/\\D/g, '').slice(-10);
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2 && cleanPhone.length === 10) {
+      var phones = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < phones.length; i++) {
+        var p = String(phones[i][0]).replace(/\\D/g, '').slice(-10);
+        if (p === cleanPhone) {
+          var targetRow = i + 2;
+          if (data.date !== undefined && data.date !== null) sheet.getRange(targetRow, 2).setValue(String(data.date));
+          if (data.timestamp !== undefined && data.timestamp !== null) sheet.getRange(targetRow, 3).setValue(String(data.timestamp));
+          if (data.duration !== undefined && data.duration !== null) sheet.getRange(targetRow, 4).setValue(String(data.duration));
+          SpreadsheetApp.flush();
+          return ContentService.createTextOutput(JSON.stringify({
+            success: true,
+            updatedRow: targetRow,
+            message: 'Phone ' + cleanPhone + ' matched at row ' + targetRow + ' and updated'
+          })).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: 'पंक्ति (Row) या फोन नंबर नहीं मिला'
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 };
 

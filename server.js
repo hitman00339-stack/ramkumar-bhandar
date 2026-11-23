@@ -1425,6 +1425,120 @@ app.delete('/api/campaign/contacts', (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5.1.5 GOOGLE SHEET SYNC & AUTO-DIALER APIS
+// ----------------------------------------------------
+app.get('/api/gsheet/config', (req, res) => {
+  try {
+    const config = db.getGSheetConfig();
+    res.json({ success: true, config });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/gsheet/config', (req, res) => {
+  try {
+    const updated = db.setGSheetConfig(req.body);
+    res.json({ success: true, message: 'Google Sheet सेटिंग्स सुरक्षित की गईं', config: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/gsheet/contacts', async (req, res) => {
+  try {
+    const targetUrl = req.query.url || db.getGSheetConfig().url;
+    if (!targetUrl) {
+      return res.status(400).json({ success: false, error: 'Google Sheet Web App URL सेट नहीं है' });
+    }
+
+    const gRes = await fetch(targetUrl, { redirect: 'follow' });
+    if (!gRes.ok) {
+      return res.status(502).json({ success: false, error: `Google Sheet से कनेक्ट नहीं हो सका (Status: ${gRes.status})` });
+    }
+
+    const data = await gRes.json();
+    if (!data.success && data.error) {
+      return res.status(502).json({ success: false, error: data.error });
+    }
+
+    const rawRows = data.rows || [];
+    let pendingCount = 0;
+    let completedCount = 0;
+    let resumeRowNumber = null;
+
+    const parsedRows = rawRows.map(r => {
+      const clean = (r.cleanPhone || r.phone || '').replace(/\D/g, '').slice(-10);
+      const isCalled = Boolean(r.isCalled || r.date || r.timestamp || r.duration);
+      if (isCalled) {
+        completedCount++;
+      } else {
+        pendingCount++;
+        if (resumeRowNumber === null) {
+          resumeRowNumber = r.rowNumber;
+        }
+      }
+      return {
+        rowNumber: r.rowNumber,
+        phone: r.phone || clean,
+        cleanPhone: clean,
+        date: r.date || '',
+        timestamp: r.timestamp || '',
+        duration: r.duration || '',
+        isCalled
+      };
+    });
+
+    db.setGSheetConfig({ lastSynced: new Date().toISOString() });
+
+    res.json({
+      success: true,
+      total: parsedRows.length,
+      pendingCount,
+      completedCount,
+      resumeRowNumber,
+      rows: parsedRows
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Google Sheet संपर्क लोड करने में त्रुटि: ' + err.message });
+  }
+});
+
+app.post('/api/gsheet/update-row', async (req, res) => {
+  try {
+    const { url, rowNumber, phone, date, timestamp, duration, status, summary } = req.body;
+    const targetUrl = url || db.getGSheetConfig().url;
+    if (!targetUrl) {
+      return res.status(400).json({ success: false, error: 'Google Sheet Web App URL अनुपलब्ध है' });
+    }
+
+    const gRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rowNumber,
+        phone,
+        date: date || new Date().toLocaleDateString('en-GB'),
+        timestamp: timestamp || new Date().toLocaleTimeString('en-IN', { hour12: true }),
+        duration: duration || '00:00',
+        status,
+        summary
+      }),
+      redirect: 'follow'
+    });
+
+    const data = await gRes.json().catch(() => ({}));
+    res.json({
+      success: true,
+      message: `Google Sheet पंक्ति ${rowNumber || phone} सफलतापूर्वक अपडेट की गई`,
+      data
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Google Sheet पंक्ति अपडेट विफल: ' + err.message });
+  }
+});
+
+// ----------------------------------------------------
 // 5.2 SPRAYER MACHINE RENTAL & QR APIS (कृषि स्प्रेयर मशीन)
 // ----------------------------------------------------
 app.get('/api/sprayers', (req, res) => {

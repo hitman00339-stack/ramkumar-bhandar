@@ -103,6 +103,10 @@ class Database {
         this.data.omnidimLogsCache = [];
         needsSave = true;
       }
+      if (!this.data.gsheetConfig) {
+        this.data.gsheetConfig = { url: '', autoResume: true, lastSynced: null };
+        needsSave = true;
+      }
       if (needsSave) this.save();
       return;
     }
@@ -321,6 +325,11 @@ class Database {
       transactions: [],
       contactsBook: [],
       campaignContacts: [],
+      gsheetConfig: {
+        url: '',
+        autoResume: true,
+        lastSynced: null
+      },
       aiPhone: {
         assistanceNumber: '+91 98260 78210',
         activeInstruction: '',
@@ -336,7 +345,7 @@ class Database {
     if (this.data) {
       this.data.lastMutationTime = new Date().toISOString();
     }
-    const isTest = process.env.NODE_ENV === 'test';
+    const isTest = process.env.NODE_ENV === 'test' || (this.filePath && this.filePath.toLowerCase().includes('test'));
     if (!isTest && !forceImmediate) {
       if (this._saveTimer) clearTimeout(this._saveTimer);
       this._saveTimer = setTimeout(() => {
@@ -1578,6 +1587,28 @@ class Database {
       lastCallDate: historyList[0]?.date || contact.lastCallDate || 'आज',
       lastDurationSec: historyList[0]?.durationSec || contact.lastDurationSec || 0
     };
+  }
+
+  // ----------------------------------------------------
+  // GOOGLE SHEET SYNC CONFIGURATION
+  // ----------------------------------------------------
+  getGSheetConfig() {
+    if (!this.data.gsheetConfig) {
+      this.data.gsheetConfig = { url: '', autoResume: true, lastSynced: null };
+    }
+    return this.data.gsheetConfig;
+  }
+
+  setGSheetConfig(config = {}) {
+    if (!this.data.gsheetConfig) {
+      this.data.gsheetConfig = { url: '', autoResume: true, lastSynced: null };
+    }
+    if (config.url !== undefined) this.data.gsheetConfig.url = String(config.url).trim();
+    if (config.autoResume !== undefined) this.data.gsheetConfig.autoResume = Boolean(config.autoResume);
+    if (config.lastSynced !== undefined) this.data.gsheetConfig.lastSynced = config.lastSynced;
+    this.data.lastMutationTime = new Date().toISOString();
+    this.save(true);
+    return this.data.gsheetConfig;
   }
 }
 

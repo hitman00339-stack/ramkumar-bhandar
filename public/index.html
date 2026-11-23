@@ -907,6 +907,11 @@
               <span>📑 कुल सुरक्षित नंबर</span>
               <span id="badge-count-total_all" class="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-[10px] font-bold font-numeric-display">0</span>
             </button>
+            <button onclick="TelephonyUI.switchCallTab('gsheet')" id="tab-btn-gsheet" class="shrink-0 h-10 px-3.5 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
+              <span class="material-symbols-outlined text-[17px] text-emerald-700">table_chart</span>
+              <span>📊 Google Sheet कॉलिंग</span>
+              <span id="badge-count-gsheet" class="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">0</span>
+            </button>
             <button onclick="TelephonyUI.switchCallTab('inauguration')" id="tab-btn-inauguration" class="shrink-0 h-10 px-3 rounded-xl text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all cursor-pointer">
               <span>🎈 उद्घाटन आमंत्रण</span>
               <span id="badge-count-inauguration" class="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px]">0</span>
@@ -2192,6 +2197,60 @@
         </button>
         <button onclick="TelephonyUI.closeCustomerProfileModal()" class="h-10 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
           बंद करें
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: GOOGLE APPS SCRIPT CODE & SETUP GUIDE -->
+  <!-- ========================================== -->
+  <div class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end md:items-center justify-center p-0 md:p-4" id="modal-gsheet-script">
+    <div class="w-full max-w-2xl bg-white rounded-t-3xl md:rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs">
+            <span class="material-symbols-outlined text-[22px]">integration_instructions</span>
+          </div>
+          <div>
+            <h3 class="font-bold text-slate-900 text-base">📊 Google Sheet Apps Script कोड व गाइड</h3>
+            <p class="text-xs text-slate-500">Google Sheet से स्वतः नंबर पढ़ने व तारीख/अवधि लिखने हेतु</p>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeGSheetScriptModal()" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <!-- Quick Steps -->
+      <div class="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 text-xs text-emerald-950 flex flex-col gap-1.5 shadow-2xs">
+        <span class="font-bold text-emerald-900 flex items-center gap-1.5 text-xs">
+          <span class="material-symbols-outlined text-[16px] text-emerald-700">bolt</span>
+          <span>सेटअप के 4 आसान चरण (केवल 1 मिनट):</span>
+        </span>
+        <ol class="list-decimal list-inside space-y-1.5 text-slate-700 text-[11px] leading-relaxed">
+          <li>अपनी Google Sheet में 4 हेडर रखें: <b>A: मोबाइल</b>, <b>B: तारीख</b>, <b>C: समय</b>, <b>D: अवधि</b>।</li>
+          <li>ऊपर मेनू में <b>Extensions &gt; Apps Script</b> पर क्लिक करें।</li>
+          <li>नीचे दिया गया कोड कॉपी करके Apps Script एडिटर में पेस्ट करें और <kbd class="px-1 py-0.5 bg-white border border-slate-300 rounded font-mono">Ctrl+S</kbd> दबाएं।</li>
+          <li>ऊपर दाईं ओर <b>Deploy &gt; New Deployment</b> पर क्लिक करें, Web App चुनें, Who has access में <b>"Anyone"</b> चुनें, और मिला हुआ URL कॉपी करके यहाँ ऐप में पेस्ट कर दें।</li>
+        </ol>
+      </div>
+
+      <!-- Code Box -->
+      <div class="relative">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-xs font-bold text-slate-700">Apps Script कोड:</span>
+          <button onclick="TelephonyUI.copyGSheetScriptCode()" class="h-7 px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold flex items-center gap-1 active:scale-95 shadow-xs cursor-pointer">
+            <span class="material-symbols-outlined text-[14px]">content_copy</span>
+            <span id="btn-copy-gsheet-code-text">कोड कॉपी करें</span>
+          </button>
+        </div>
+        <textarea id="gsheet-script-code-area" readonly rows="12" class="w-full p-3 rounded-xl bg-slate-900 text-emerald-400 font-mono text-[11px] outline-none select-all"></textarea>
+      </div>
+
+      <div class="flex justify-end pt-2 border-t border-slate-100">
+        <button onclick="TelephonyUI.closeGSheetScriptModal()" class="h-10 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
+          समझ गया, बंद करें
         </button>
       </div>
     </div>
