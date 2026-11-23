@@ -4573,6 +4573,6 @@ function doPost(e) {
       error: err.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
-};
+}`;
 
 window.TelephonyUI = TelephonyUI;
