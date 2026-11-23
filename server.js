@@ -793,6 +793,10 @@ async function syncAllOmnidimLogs() {
     if (allLogs.length > 0) {
       db.recordCallHistoryFromLogs(allLogs, { autoHarvestInbound: false });
       console.log(`[Omnidim Sync] Successfully ingested ${allLogs.length} call logs into master directory.`);
+      // Self-healing: auto-reconcile Google Sheet records against completed Omnidimension logs
+      reconcileGSheetWithOmnidimLogs().catch(err => {
+        console.warn('[GSheet Auto-Reconcile Error]:', err.message);
+      });
     }
   } catch (err) {
     console.warn('[Omnidim Sync Error]:', err.message);
@@ -1465,6 +1469,194 @@ app.post('/api/gsheet/config', (req, res) => {
   }
 });
 
+function normalizeSheetTime(val) {
+  if (!val) return '';
+  const str = String(val).trim();
+  if (/^\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?$/i.test(str)) return str;
+  const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+  if (match) {
+    let h = parseInt(match[1], 10);
+    const m = match[2];
+    const s = match[3];
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m}:${s} ${ampm}`;
+  }
+  return str;
+}
+
+function normalizeSheetDuration(val) {
+  if (!val) return '';
+  const str = String(val).trim();
+  if (str.includes('नहीं उठा') || str.includes('00:00')) return 'नहीं उठा (00:00)';
+  if (str.includes('1899') || str.includes('GMT')) {
+    const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+    if (match) {
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const s = parseInt(match[3], 10);
+      if (s === 0) {
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      }
+      const totalSec = (h * 3600) + (m * 60) + s;
+      const finalM = Math.floor(totalSec / 60);
+      const finalS = totalSec % 60;
+      return `${String(finalM).padStart(2, '0')}:${String(finalS).padStart(2, '0')}`;
+    }
+  }
+  const mMatch = str.match(/^(\d{1,2}):(\d{2})$/);
+  if (mMatch) {
+    return `${String(mMatch[1]).padStart(2, '0')}:${mMatch[2]}`;
+  }
+  return str;
+}
+
+let isReconcilingGSheet = false;
+async function reconcileGSheetWithOmnidimLogs() {
+  if (isReconcilingGSheet) return { success: true, count: 0, message: 'Reconciliation already in progress' };
+  const sheetConfig = db.getGSheetConfig();
+  if (!sheetConfig || !sheetConfig.url) return { success: false, error: 'No GSheet URL configured' };
+
+  isReconcilingGSheet = true;
+  try {
+    const allOmniLogs = db.data.omnidimLogsCache || [];
+    if (allOmniLogs.length === 0) return { success: true, count: 0 };
+
+    const gRes = await fetch(sheetConfig.url, { redirect: 'follow' });
+    if (!gRes.ok) return { success: false, error: `Google Sheet fetch status ${gRes.status}` };
+    const gData = await gRes.json();
+    if (!gData.success || !Array.isArray(gData.rows)) return { success: false, error: 'Invalid sheet response' };
+
+    const rowsToFix = [];
+
+    for (const r of gData.rows) {
+      const cleanPhone = (r.cleanPhone || r.phone || '').replace(/\D/g, '').slice(-10);
+      if (cleanPhone.length !== 10) continue;
+
+      const omniMatches = allOmniLogs.filter(l => {
+        const toClean = (l.to_number || '').replace(/\D/g, '').slice(-10);
+        const fromClean = (l.from_number || '').replace(/\D/g, '').slice(-10);
+        return toClean === cleanPhone || fromClean === cleanPhone;
+      });
+
+      if (omniMatches.length === 0) continue;
+
+      const latestLog = omniMatches[0];
+      const rawStatus = (latestLog.call_status || '').toLowerCase();
+      let durationSec = latestLog.call_duration_in_seconds || 0;
+      let durationMin = latestLog.call_duration_in_minutes || 0;
+      let totalSec = (durationMin * 60) + durationSec;
+
+      if (totalSec === 0 && latestLog.call_duration) {
+        const match = String(latestLog.call_duration).match(/(?:(\d+)\.)?(\d+):(\d+)/);
+        if (match) {
+          const m = parseInt(match[2], 10) || 0;
+          const s = parseInt(match[3], 10) || 0;
+          totalSec = (m * 60) + s;
+          durationMin = Math.floor(totalSec / 60);
+          durationSec = totalSec % 60;
+        }
+      }
+
+      const hasConversation = Boolean(
+        latestLog.call_conversation && 
+        /user:|caller:|ग्राहक:/i.test(latestLog.call_conversation)
+      );
+
+      const isConnected = rawStatus === 'completed' && (totalSec > 0 || hasConversation);
+      const isFailed = rawStatus === 'no-answer' || rawStatus === 'busy' || rawStatus === 'failed';
+
+      const rawTime = latestLog.time_of_call || latestLog.created_at || latestLog.timestamp;
+      let logDate = new Date().toLocaleDateString('en-GB');
+      let logTime = new Date().toLocaleTimeString('en-IN', { hour12: true });
+      if (rawTime) {
+        const logMs = parseOmnidimLogTimestamp(rawTime);
+        if (!isNaN(logMs) && logMs > 0) {
+          const d = new Date(logMs);
+          logDate = d.toLocaleDateString('en-GB');
+          logTime = d.toLocaleTimeString('en-IN', { hour12: true });
+        }
+      }
+
+      const currentDur = String(r.duration || '').trim();
+      const isMarkedFailed = currentDur.includes('नहीं उठा') || currentDur.includes('00:00');
+      const isBlank = !r.date && !r.timestamp && !currentDur;
+      const isMissingDate = !r.date && r.timestamp;
+
+      if (isConnected) {
+        const targetDur = `${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
+        if (isMarkedFailed || isBlank || isMissingDate || (currentDur && !currentDur.includes(targetDur))) {
+          rowsToFix.push({
+            rowNumber: r.rowNumber,
+            phone: cleanPhone,
+            date: logDate,
+            timestamp: logTime,
+            duration: targetDur,
+            status: 'connected',
+            reason: `Omnidimension talk duration ${targetDur}`
+          });
+        }
+      } else if (isFailed && isBlank) {
+        rowsToFix.push({
+          rowNumber: r.rowNumber,
+          phone: cleanPhone,
+          date: logDate,
+          timestamp: logTime,
+          duration: 'नहीं उठा (00:00)',
+          status: 'failed',
+          reason: 'Omnidimension no-answer recorded'
+        });
+      }
+    }
+
+    if (rowsToFix.length > 0) {
+      console.log(`[GSheet Auto-Reconciliation] Reconciling ${rowsToFix.length} rows with Omnidimension...`);
+      for (const update of rowsToFix) {
+        try {
+          await fetch(sheetConfig.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              rowNumber: update.rowNumber,
+              phone: update.phone,
+              date: update.date,
+              timestamp: update.timestamp,
+              duration: update.duration,
+              status: update.status
+            }),
+            redirect: 'follow'
+          });
+          console.log(`[GSheet Auto-Reconciliation] ✓ Fixed Row ${update.rowNumber} (${update.phone}): ${update.duration} (${update.reason})`);
+        } catch (postErr) {
+          console.warn(`[GSheet Auto-Reconciliation] Error updating row ${update.rowNumber}:`, postErr.message);
+        }
+        await new Promise(r => setTimeout(r, 250));
+      }
+    }
+    return { success: true, count: rowsToFix.length };
+  } catch (err) {
+    console.warn('[GSheet Auto-Reconciliation Error]:', err.message);
+    return { success: false, error: err.message };
+  } finally {
+    isReconcilingGSheet = false;
+  }
+}
+
+app.post('/api/gsheet/reconcile', async (req, res) => {
+  try {
+    const result = await reconcileGSheetWithOmnidimLogs();
+    res.json({
+      success: true,
+      message: result.count > 0 
+        ? `सफलतापूर्वक ${result.count} पंक्तियां Omnidimension रिकॉर्ड्स से सिंक की गईं!`
+        : 'Google Sheet और Omnidimension पहले से पूरी तरह 100% सिंक हैं!',
+      ...result
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/gsheet/contacts', async (req, res) => {
   try {
     const targetUrl = req.query.url || db.getGSheetConfig().url;
@@ -1503,8 +1695,8 @@ app.get('/api/gsheet/contacts', async (req, res) => {
         phone: r.phone || clean,
         cleanPhone: clean,
         date: r.date || '',
-        timestamp: r.timestamp || '',
-        duration: r.duration || '',
+        timestamp: normalizeSheetTime(r.timestamp),
+        duration: normalizeSheetDuration(r.duration),
         isCalled
       };
     });

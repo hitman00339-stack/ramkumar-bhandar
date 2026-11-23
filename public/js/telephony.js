@@ -2797,7 +2797,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
           gMatch.duration = 'नहीं उठा (00:00)';
           gMatch.isCalled = true;
         }
-        fetch('/api/gsheet/update-row', {
+        await fetch('/api/gsheet/update-row', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2940,7 +2940,7 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         gMatch.duration = finalDur;
         gMatch.isCalled = true;
       }
-      fetch('/api/gsheet/update-row', {
+      await fetch('/api/gsheet/update-row', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4171,6 +4171,64 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
     }
   },
 
+  formatDisplayTime(val) {
+    if (!val) return '';
+    const str = String(val).trim();
+    if (/^\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?$/i.test(str)) return str;
+    const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+    if (match) {
+      let h = parseInt(match[1], 10);
+      const m = match[2];
+      const s = match[3];
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${m}:${s} ${ampm}`;
+    }
+    return str;
+  },
+
+  formatDisplayDuration(val) {
+    if (!val) return '';
+    const str = String(val).trim();
+    if (str.includes('नहीं उठा') || str.includes('00:00')) return 'नहीं उठा (00:00)';
+    if (str.includes('1899') || str.includes('GMT')) {
+      const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+      if (match) {
+        const h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const s = parseInt(match[3], 10);
+        if (s === 0) {
+          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        }
+        const totalSec = (h * 3600) + (m * 60) + s;
+        const finalM = Math.floor(totalSec / 60);
+        const finalS = totalSec % 60;
+        return `${String(finalM).padStart(2, '0')}:${String(finalS).padStart(2, '0')}`;
+      }
+    }
+    const mMatch = str.match(/^(\d{1,2}):(\d{2})$/);
+    if (mMatch) {
+      return `${String(mMatch[1]).padStart(2, '0')}:${mMatch[2]}`;
+    }
+    return str;
+  },
+
+  async reconcileGSheetWithOmnidim() {
+    AppState.showToast('🔄 Omnidimension रिकॉर्ड्स से Google Sheet का मिलान किया जा रहा है...');
+    try {
+      const res = await fetch('/api/gsheet/reconcile', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        AppState.showToast(data.message || 'सफल सिंक!');
+        await this.fetchGSheetRows(false);
+      } else {
+        alert(data.error || 'सिंक विफल');
+      }
+    } catch (err) {
+      alert('सिंक त्रुटि: ' + err.message);
+    }
+  },
+
   filterGSheetRows(query) {
     this.gsheetSearchQuery = (query || '').trim().toLowerCase();
     try { this.renderCurrentTab(); } catch (e) {}
@@ -4329,6 +4387,10 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
                 <span class="material-symbols-outlined text-[16px] ${this.isGSheetLoading ? 'animate-spin text-emerald-700' : 'text-slate-600'}">sync</span>
                 <span>${this.isGSheetLoading ? 'लोड हो रहा है...' : '🔄 शीट लोड करें'}</span>
               </button>
+              <button onclick="TelephonyUI.reconcileGSheetWithOmnidim()" title="Omnidimension से सीधे Google Sheet का मिलान करें" class="h-10 px-3.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-950 border border-indigo-200 font-bold text-xs flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer">
+                <span class="material-symbols-outlined text-[16px] text-indigo-700">sync_saved_locally</span>
+                <span>🔄 ऑटो-सिंक मिलान</span>
+              </button>
             </div>
           </div>
           
@@ -4448,8 +4510,8 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
                           <span class="font-mono font-bold text-slate-900">+91 ${r.cleanPhone.slice(0, 5)} ${r.cleanPhone.slice(5)}</span>
                         </td>
                         <td class="py-2.5 px-3 font-mono text-slate-700">${r.date || '<span class="text-slate-300">--</span>'}</td>
-                        <td class="py-2.5 px-3 font-mono text-slate-700">${r.timestamp || '<span class="text-slate-300">--</span>'}</td>
-                        <td class="py-2.5 px-3 font-mono font-bold text-slate-800">${r.duration || '<span class="text-slate-300 font-normal">--</span>'}</td>
+                        <td class="py-2.5 px-3 font-mono text-slate-700">${TelephonyUI.formatDisplayTime(r.timestamp) || '<span class="text-slate-300">--</span>'}</td>
+                        <td class="py-2.5 px-3 font-mono font-bold text-slate-800">${TelephonyUI.formatDisplayDuration(r.duration) || '<span class="text-slate-300 font-normal">--</span>'}</td>
                         <td class="py-2.5 px-3">${statusBadge}</td>
                         <td class="py-2.5 px-3 text-right">
                           <button onclick="TelephonyUI.dialSingleGSheetRow(${r.rowNumber})" class="h-7 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer">
@@ -4502,7 +4564,7 @@ function doGet(e) {
     }
     
     var range = sheet.getRange(2, 1, lastRow - 1, 4);
-    var values = range.getValues();
+    var values = range.getDisplayValues();
     var rows = [];
     var pendingCount = 0;
     var completedCount = 0;

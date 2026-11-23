@@ -15,6 +15,9 @@ Write-Host "Java Version:"
 Write-Host "Syncing Capacitor Web Assets..."
 npx cap sync android
 
+Write-Host "Ensuring Android Resources..."
+& powershell -ExecutionPolicy Bypass -File scripts\setup_res.ps1
+
 Write-Host "Building Android Debug APK via Gradle..."
 & $gradleBat -p android assembleDebug
 

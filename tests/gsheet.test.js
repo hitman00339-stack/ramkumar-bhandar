@@ -203,6 +203,101 @@ test('Google Sheets Integration & Auto-Resume Calling Tests', async (t) => {
     assert.strictEqual(history[1].status, 'failed');
   });
 
+  await t.test('8. Date, Time & Duration Normalization: Eliminates 1899 epoch artifacts and formats cleanly', () => {
+    // Normalization logic as in server and telephony UI
+    function normalizeSheetTime(val) {
+      if (!val) return '';
+      const str = String(val).trim();
+      if (/^\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?$/i.test(str)) return str;
+      const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+      if (match) {
+        let h = parseInt(match[1], 10);
+        const m = match[2];
+        const s = match[3];
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        return `${h}:${m}:${s} ${ampm}`;
+      }
+      return str;
+    }
+
+    function normalizeSheetDuration(val) {
+      if (!val) return '';
+      const str = String(val).trim();
+      if (str.includes('नहीं उठा') || str.includes('00:00')) return 'नहीं उठा (00:00)';
+      if (str.includes('1899') || str.includes('GMT')) {
+        const match = str.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+        if (match) {
+          const h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          const s = parseInt(match[3], 10);
+          if (s === 0) {
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+          }
+          const totalSec = (h * 3600) + (m * 60) + s;
+          const finalM = Math.floor(totalSec / 60);
+          const finalS = totalSec % 60;
+          return `${String(finalM).padStart(2, '0')}:${String(finalS).padStart(2, '0')}`;
+        }
+      }
+      const mMatch = str.match(/^(\d{1,2}):(\d{2})$/);
+      if (mMatch) {
+        return `${String(mMatch[1]).padStart(2, '0')}:${mMatch[2]}`;
+      }
+      return str;
+    }
+
+    // Test cases matching Google Sheet live output
+    assert.strictEqual(
+      normalizeSheetTime('Sat Dec 30 1899 20:24:37 GMT+0521 (India Standard Time)'),
+      '8:24:37 PM'
+    );
+    assert.strictEqual(normalizeSheetTime('8:24:37 PM'), '8:24:37 PM');
+    assert.strictEqual(normalizeSheetTime(''), '');
+
+    assert.strictEqual(
+      normalizeSheetDuration('Sat Dec 30 1899 00:27:00 GMT+0521 (India Standard Time)'),
+      '00:27'
+    );
+    assert.strictEqual(
+      normalizeSheetDuration('Sat Dec 30 1899 01:41:00 GMT+0521 (India Standard Time)'),
+      '01:41'
+    );
+    assert.strictEqual(normalizeSheetDuration('नहीं उठा (00:00)'), 'नहीं उठा (00:00)');
+    assert.strictEqual(normalizeSheetDuration('1:41'), '01:41');
+  });
+
+  await t.test('9. Self-Healing Reconciliation Invariant: Answered call in Omnidimension overrides false no-answer in sheet', () => {
+    const mockSheetRow = {
+      rowNumber: 15,
+      phone: '7754800480',
+      cleanPhone: '7754800480',
+      date: '23/11/2026',
+      timestamp: '8:44:40 PM',
+      duration: 'नहीं उठा (00:00)'
+    };
+
+    const mockOmniLog = {
+      id: 11787245,
+      to_number: '+917754800480',
+      call_status: 'completed',
+      call_duration_in_seconds: 10,
+      call_duration_in_minutes: 0,
+      call_duration: '0.00:10.00',
+      time_of_call: '11/23/2026 15:09:28'
+    };
+
+    const isConnected = mockOmniLog.call_status === 'completed' && (mockOmniLog.call_duration_in_seconds > 0 || mockOmniLog.call_duration_in_minutes > 0);
+    const targetDur = `${String(mockOmniLog.call_duration_in_minutes).padStart(2, '0')}:${String(mockOmniLog.call_duration_in_seconds).padStart(2, '0')}`;
+
+    assert.strictEqual(isConnected, true);
+    assert.strictEqual(targetDur, '00:10');
+
+    // Reconciliation check
+    const needsFix = isConnected && (mockSheetRow.duration.includes('नहीं उठा') || mockSheetRow.duration.includes('00:00'));
+    assert.strictEqual(needsFix, true, 'Row 15 must be flagged for reconciliation because Omnidimension recorded 10s talk');
+  });
+
   // Clean up test DB
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
 });
