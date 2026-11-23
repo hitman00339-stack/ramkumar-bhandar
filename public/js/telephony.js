@@ -87,9 +87,14 @@ const TelephonyUI = {
     await Promise.allSettled([
       this.fetchContactsBook(),
       this.fetchCampaignContacts(),
-      this.fetchGSheetConfig(),
+      this.fetchGSheetConfig().then(() => {
+        if (this.gsheetConfig?.url) {
+          return this.fetchGSheetRows(false);
+        }
+      }),
       this.fetchLiveOmnidimLogs(true)
     ]);
+    this.updateContactsBookBadges();
     try {
       this.renderCurrentTab();
     } catch (e) {
@@ -4071,6 +4076,9 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
         const data = await res.json();
         if (data.config) {
           this.gsheetConfig = data.config;
+          if (this.gsheetConfig.url && (!this.gsheetRows || this.gsheetRows.length === 0)) {
+            this.fetchGSheetRows(false);
+          }
         }
       }
     } catch (err) {
