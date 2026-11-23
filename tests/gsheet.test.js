@@ -153,6 +153,57 @@ test('Google Sheets Integration & Auto-Resume Calling Tests', async (t) => {
     assert.strictEqual(validList[1].rowNumber, 5);
   });
 
+  await t.test('7. 10-Digit Call History Search: Computes total calls, recordings and status accurately', () => {
+    // Seed test call logs for a specific 10-digit number
+    const targetClean = '8175044956';
+    db.data.omnidimLogsCache = [
+      {
+        id: 11699390,
+        to_number: '+91' + targetClean,
+        from_number: '+918045440103',
+        call_status: 'completed',
+        call_duration_in_seconds: 45,
+        call_duration_in_minutes: 1,
+        recording_url: 'https://omnidim.io/recordings/call_11699390.mp3',
+        sentiment_analysis_details: 'ग्राहक ने खाद के नए रेट के बारे में पूछा',
+        time_of_call: '2026-11-21 17:35:00'
+      },
+      {
+        id: 11699383,
+        to_number: '+91' + targetClean,
+        from_number: '+918045440103',
+        call_status: 'failed',
+        call_duration_in_seconds: 0,
+        call_duration_in_minutes: 0,
+        recording_url: null,
+        sentiment_analysis_details: 'उत्तर नहीं मिला',
+        time_of_call: '2026-11-20 14:10:00'
+      },
+      {
+        id: 11699300,
+        to_number: '+919999999999', // Different number
+        from_number: '+918045440103',
+        call_status: 'completed',
+        call_duration_in_seconds: 30,
+        recording_url: 'https://omnidim.io/recordings/call_other.mp3',
+        time_of_call: '2026-11-20 12:00:00'
+      }
+    ];
+
+    const profile = db.getContactProfile(targetClean);
+    assert.ok(profile, 'Profile should be returned');
+    assert.strictEqual(profile.cleanPhone, targetClean);
+    assert.strictEqual(profile.totalCalls, 2, 'Should find exactly 2 calls for this number');
+
+    const history = profile.callHistory;
+    assert.strictEqual(history.length, 2);
+    assert.strictEqual(history[0].status, 'completed');
+    assert.strictEqual(history[0].durationStr, '01:45');
+    assert.ok(history[0].audioUrl.includes('call_11699390.mp3'), 'Recording URL must be preserved');
+    assert.strictEqual(history[1].status, 'failed');
+  });
+
   // Clean up test DB
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
 });
+

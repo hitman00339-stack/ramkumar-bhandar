@@ -3828,6 +3828,240 @@ ${data.failedCalls.slice(0, 3).map(c => `• ${c.customerName} (${c.phone}) - ${
   },
 
   // ----------------------------------------------------
+  // 10-DIGIT NUMBER CALL HISTORY & RECORDINGS SEARCH TOOL
+  // ----------------------------------------------------
+  openNumberSearchModal(prefillNumber = null) {
+    const modal = document.getElementById('modal-number-search');
+    if (!modal) return;
+    const input = document.getElementById('number-search-input');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    if (prefillNumber) {
+      if (input) input.value = prefillNumber;
+      this.searchNumberHistory(prefillNumber);
+    } else {
+      if (input) {
+        input.focus();
+        if (input.value && input.value.replace(/\D/g, '').length === 10) {
+          this.searchNumberHistory();
+        }
+      }
+    }
+  },
+
+  closeNumberSearchModal() {
+    const modal = document.getElementById('modal-number-search');
+    if (modal) {
+      const audios = modal.querySelectorAll('audio');
+      audios.forEach(a => a.pause());
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+  },
+
+  async searchNumberHistory(customNumber = null) {
+    const input = document.getElementById('number-search-input');
+    const raw = (customNumber !== null && customNumber !== undefined ? String(customNumber) : (input ? input.value : '')).trim();
+    const clean = raw.replace(/\D/g, '').slice(-10);
+
+    const container = document.getElementById('number-search-results');
+    if (!container) return;
+
+    if (clean.length !== 10) {
+      container.innerHTML = `
+        <div class="p-6 bg-amber-50 rounded-2xl border border-amber-200 text-center text-xs text-amber-900 flex flex-col items-center justify-center gap-1.5">
+          <span class="material-symbols-outlined text-[28px] text-amber-700">warning</span>
+          <span class="font-bold text-sm">कृपया मान्य 10-अंकों का मोबाइल नंबर दर्ज करें</span>
+          <span class="text-[11px] text-amber-800">आपने ${clean.length} अंक दर्ज किए हैं। मोबाइल नंबर पूरे 10 अंकों का होना आवश्यक है।</span>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="p-8 text-center text-xs text-slate-500 flex flex-col items-center justify-center gap-2">
+        <span class="material-symbols-outlined text-[32px] text-indigo-600 animate-spin">progress_activity</span>
+        <span>नंबर <b>+91 ${clean.slice(0, 5)} ${clean.slice(5)}</b> का कॉल इतिहास व रिकॉर्डिंग खोजी जा रही है...</span>
+      </div>
+    `;
+
+    // 1. Fetch from backend CRM profile API
+    let profile = null;
+    try {
+      const res = await fetch(`/api/contacts-book/${clean}/profile`);
+      if (res.ok) {
+        const json = await res.json();
+        profile = json.profile;
+      }
+    } catch (e) {
+      console.warn('Profile fetch error:', e);
+    }
+
+    // 2. Cross-reference cachedOmniLogs for any live or unindexed calls
+    const omniMatches = (this.cachedOmniLogs || []).filter(l => {
+      const to = (l.to_number || '').replace(/\D/g, '').slice(-10);
+      const from = (l.from_number || '').replace(/\D/g, '').slice(-10);
+      return to === clean || from === clean;
+    });
+
+    // 3. Cross-reference contactsBook
+    const bookMatch = (this.contactsBook || []).find(c => (c.cleanPhone || '').replace(/\D/g, '').slice(-10) === clean);
+
+    const customerName = profile?.name || bookMatch?.name || (omniMatches[0]?.user_name) || 'ग्रामवासी / ग्राहक';
+
+    // Build unified history list
+    let history = profile?.callHistory ? [...profile.callHistory] : [];
+    const seenIds = new Set(history.map(h => String(h.id || '')));
+
+    omniMatches.forEach(l => {
+      const lid = String(l.id || '');
+      if (lid && (seenIds.has(lid) || seenIds.has('omni_' + lid))) return;
+      if (lid) seenIds.add(lid);
+
+      const durationSec = (l.call_duration_in_minutes || 0) * 60 + (l.call_duration_in_seconds || 0);
+      const rawStatus = (l.call_status || '').toLowerCase();
+      const status = rawStatus === 'completed' ? (durationSec > 0 ? 'completed' : 'failed') : 'failed';
+      let recUrl = l.internal_recording_url || l.recording_url;
+      if (recUrl && recUrl.startsWith('/')) recUrl = 'https://omnidim.io' + recUrl;
+
+      const durM = Math.floor(durationSec / 60);
+      const durS = durationSec % 60;
+      const durationStr = `${String(durM).padStart(2, '0')}:${String(durS).padStart(2, '0')}`;
+
+      history.push({
+        id: 'omni_' + (l.id || Date.now()),
+        date: l.time_of_call || 'हाल ही में',
+        direction: l.call_direction || 'outbound',
+        status,
+        rawStatus,
+        durationStr,
+        summary: l.sentiment_analysis_details || l.call_summary || (status === 'completed' ? 'सफल बातचीत' : 'कॉल नहीं लगी'),
+        transcript: l.call_conversation || '',
+        audioUrl: recUrl
+      });
+    });
+
+    const totalCalls = history.length;
+    const connectedCount = history.filter(h => h.status === 'completed' || (h.durationStr && h.durationStr !== '00:00' && !h.durationStr.includes('नहीं'))).length;
+    const failedCount = totalCalls - connectedCount;
+    const formattedPhone = `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
+
+    if (totalCalls === 0) {
+      container.innerHTML = `
+        <div class="p-6 bg-slate-50 rounded-2xl border border-slate-200 text-center flex flex-col items-center justify-center gap-3">
+          <div class="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+            <span class="material-symbols-outlined text-[28px]">phone_disabled</span>
+          </div>
+          <div>
+            <span class="font-bold text-slate-900 text-sm block">${formattedPhone}</span>
+            <p class="text-xs text-slate-500 mt-1">इस नंबर पर अब तक कोई AI कॉल रिकॉर्ड नहीं मिला है।</p>
+          </div>
+          <button onclick="TelephonyUI.closeNumberSearchModal(); TelephonyUI.redialCustomer('${formattedPhone}', '${customerName}');" class="h-9 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer">
+            <span class="material-symbols-outlined text-[16px]">call</span>
+            <span>📞 इस नंबर पर पहली AI कॉल लगाएं</span>
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    // Render Full History with Audio Recordings
+    container.innerHTML = `
+      <!-- TOP METRIC BANNER -->
+      <div class="p-4 bg-gradient-to-r from-indigo-900 to-slate-900 rounded-2xl text-white shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-base font-bold font-mono text-amber-300">${formattedPhone}</span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-200 border border-white/20">${customerName}</span>
+          </div>
+          <div class="flex items-center gap-3 mt-1.5 text-xs">
+            <span class="text-indigo-200 font-medium">
+              📊 अब तक कुल: <b class="text-white text-sm font-numeric-display">${totalCalls}</b> कॉल्स
+            </span>
+            <span class="text-emerald-300 font-medium">
+              ✅ बात हुई: <b class="text-white text-sm font-numeric-display">${connectedCount}</b>
+            </span>
+            <span class="text-rose-300 font-medium">
+              ❌ मिस: <b class="text-white text-sm font-numeric-display">${failedCount}</b>
+            </span>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeNumberSearchModal(); TelephonyUI.redialCustomer('${formattedPhone}', '${customerName}');" class="h-9 px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer shrink-0">
+          <span class="material-symbols-outlined text-[16px]">call</span>
+          <span>📞 दोबारा कॉल लगाएं</span>
+        </button>
+      </div>
+
+      <!-- CALL HISTORY LIST WITH RECORDINGS -->
+      <div class="flex flex-col gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
+        <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[16px] text-indigo-700">history</span>
+          <span>कॉल विवरण एवं ऑडियो रिकॉर्डिंग्स (${totalCalls}):</span>
+        </span>
+
+        ${history.map((h, i) => {
+          const isConnected = h.status === 'completed' || (h.durationStr && h.durationStr !== '00:00' && !h.durationStr.includes('नहीं'));
+          const isInbound = h.direction === 'inbound';
+          const audioSrc = h.audioUrl ? this.getAudioStreamUrl(h.audioUrl) : null;
+
+          return `
+            <div class="p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-2xl border border-slate-200 flex flex-col gap-2.5 transition-all">
+              <div class="flex items-center justify-between text-xs flex-wrap gap-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-5 h-5 rounded-full ${isConnected ? 'bg-emerald-600' : 'bg-rose-600'} text-white font-bold text-[10px] flex items-center justify-center shrink-0">
+                    ${i + 1}
+                  </span>
+                  <span class="font-bold text-slate-800">${h.date || 'हाल ही में'}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isInbound ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-indigo-100 text-indigo-900 border border-indigo-200'}">
+                    ${isInbound ? '📥 इनकमिंग' : '📤 आउटगोइंग'}
+                  </span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isConnected ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'}">
+                    ${isConnected ? '✅ बात हुई' : '❌ नहीं उठा'}
+                  </span>
+                </div>
+                <span class="font-mono font-bold text-xs text-slate-700">⏱️ ${h.durationStr || '00:00'}</span>
+              </div>
+
+              ${h.summary ? `
+                <div class="text-xs text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200">
+                  <span class="font-bold text-slate-500 block text-[10px] uppercase mb-0.5">बातचीत सारांश (AI Summary):</span>
+                  <span>${h.summary}</span>
+                </div>
+              ` : ''}
+
+              <!-- AUDIO RECORDING PLAYER -->
+              ${audioSrc ? `
+                <div class="p-2.5 bg-emerald-50/70 rounded-xl border border-emerald-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <div class="flex items-center gap-1.5 text-xs font-bold text-emerald-950">
+                    <span class="material-symbols-outlined text-[18px] text-emerald-700 animate-pulse">record_voice_over</span>
+                    <span>ऑडियो रिकॉर्डिंग सुनें:</span>
+                  </div>
+                  <audio controls preload="metadata" class="w-full sm:w-64 h-8" src="${audioSrc}"></audio>
+                </div>
+              ` : `
+                <div class="text-[11px] text-slate-400 italic px-2">
+                  ℹ️ इस कॉल की रिकॉर्डिंग उपलब्ध नहीं है (उत्तर नहीं मिला या कनेक्ट नहीं हुआ)।
+                </div>
+              `}
+
+              ${h.transcript ? `
+                <details class="text-xs text-slate-700 bg-white p-2 rounded-xl border border-slate-200 cursor-pointer">
+                  <summary class="font-bold text-indigo-700 hover:text-indigo-900 select-none text-[11px]">
+                    💬 शब्द-दर-शब्द चैट ट्रांसक्रिप्ट देखें...
+                  </summary>
+                  <div class="mt-2 pt-2 border-t border-slate-100 whitespace-pre-wrap font-mono text-[11px] leading-relaxed max-h-36 overflow-y-auto">
+                    ${h.transcript.replace(/<br\s*\/?>/gi, '\n')}
+                  </div>
+                </details>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  },
+
+  // ----------------------------------------------------
   // GOOGLE SHEET SYNC, REAL-TIME LOGGING & AUTO-DIALER
   // ----------------------------------------------------
   async fetchGSheetConfig() {

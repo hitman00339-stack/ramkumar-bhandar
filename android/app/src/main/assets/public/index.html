@@ -939,10 +939,17 @@
             </button>
           </div>
 
-          <!-- Search Bar -->
-          <div class="relative w-full md:w-72">
-            <span class="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">search</span>
-            <input type="text" id="telephony-search-input" oninput="TelephonyUI.handleSearch(this.value)" placeholder="नंबर या ग्राहक नाम खोजें..." class="w-full h-10 pl-9 pr-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 font-medium outline-none focus:border-emerald-600 shadow-xs"/>
+          <!-- Search Bar & 10-Digit History Search Button -->
+          <div class="flex items-center gap-2 w-full md:w-auto flex-1">
+            <div class="relative flex-1">
+              <span class="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-[18px]">search</span>
+              <input type="text" id="telephony-search-input" oninput="TelephonyUI.handleSearch(this.value)" onkeydown="if(event.key==='Enter' && this.value.replace(/\D/g, '').length >= 10) TelephonyUI.openNumberSearchModal(this.value.replace(/\D/g, '').slice(-10))" placeholder="नंबर या ग्राहक नाम खोजें (Enter दबाएं)..." class="w-full h-10 pl-9 pr-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 font-medium outline-none focus:border-emerald-600 shadow-xs"/>
+            </div>
+            <button onclick="TelephonyUI.openNumberSearchModal()" class="h-10 px-3.5 rounded-xl bg-gradient-to-r from-indigo-700 to-indigo-900 hover:from-indigo-800 hover:to-indigo-950 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer shrink-0" title="किसी भी 10-अंकों के नंबर का कॉल इतिहास व रिकॉर्डिंग खोजें">
+              <span class="material-symbols-outlined text-[17px] text-amber-300">phone_in_talk</span>
+              <span class="hidden sm:inline">🔍 10-अंक कॉल इतिहास व रिकॉर्डिंग</span>
+              <span class="sm:hidden">🔍 नंबर खोज</span>
+            </button>
           </div>
 
           <!-- Day-wise Date Filter -->
@@ -2251,6 +2258,61 @@
       <div class="flex justify-end pt-2 border-t border-slate-100">
         <button onclick="TelephonyUI.closeGSheetScriptModal()" class="h-10 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
           समझ गया, बंद करें
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: 10-DIGIT NUMBER CALL HISTORY & RECORDINGS SEARCH -->
+  <!-- ========================================== -->
+  <div class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end md:items-center justify-center p-0 md:p-4" id="modal-number-search">
+    <div class="w-full max-w-xl bg-white rounded-t-3xl md:rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-700 to-indigo-900 text-white flex items-center justify-center shadow-xs">
+            <span class="material-symbols-outlined text-[22px]">phone_in_talk</span>
+          </div>
+          <div>
+            <h3 class="font-bold text-slate-900 text-base">🔍 नंबर-वार कॉल इतिहास एवं रिकॉर्डिंग</h3>
+            <p class="text-xs text-slate-500">किसी भी 10 अंकों के नंबर पर अब तक हुई कुल कॉल्स व रिकॉर्डिंग देखें</p>
+          </div>
+        </div>
+        <button onclick="TelephonyUI.closeNumberSearchModal()" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 cursor-pointer">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <!-- Search Input Box -->
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center gap-2">
+          <div class="relative flex-1">
+            <span class="material-symbols-outlined absolute left-3 top-3 text-slate-400 text-[18px]">call</span>
+            <input type="tel" id="number-search-input" maxlength="15"
+              onkeydown="if(event.key==='Enter') TelephonyUI.searchNumberHistory()"
+              placeholder="10 अंकों का मोबाइल नंबर डालें (उदा. 9876543210)"
+              class="w-full h-11 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-300 text-sm font-mono font-bold text-slate-900 outline-none focus:border-indigo-600 focus:bg-white transition-all"/>
+          </div>
+          <button onclick="TelephonyUI.searchNumberHistory()" class="h-11 px-4 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer shrink-0">
+            <span class="material-symbols-outlined text-[16px]">search</span>
+            <span>खोजें</span>
+          </button>
+        </div>
+        <p class="text-[11px] text-slate-500">💡 10 अंकों का कोई भी नंबर डालकर 'खोजें' दबाएं। यह उस नंबर की कुल कॉल्स, तारीख, समय, बातचीत अवधि और ऑडियो रिकॉर्डिंग दिखाएगा।</p>
+      </div>
+
+      <!-- Results Container -->
+      <div id="number-search-results" class="flex flex-col gap-3 min-h-[140px]">
+        <div class="p-8 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+          <span class="material-symbols-outlined text-[36px] text-slate-300">manage_search</span>
+          <span class="font-medium text-slate-600">ऊपर किसी भी ग्राहक का 10-अंकों का नंबर डालकर "खोजें" दबाएं।</span>
+          <span class="text-[11px] text-slate-400">यह सिस्टम में मौजूद सभी इनकमिंग व आउटगोइंग कॉल्स खोज निकालेगा।</span>
+        </div>
+      </div>
+
+      <div class="flex justify-end pt-2 border-t border-slate-100">
+        <button onclick="TelephonyUI.closeNumberSearchModal()" class="h-10 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer">
+          बंद करें
         </button>
       </div>
     </div>
